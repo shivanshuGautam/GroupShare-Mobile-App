@@ -5,13 +5,19 @@ const createTransporter = () => {
   const pass = (process.env.EMAIL_PASS || process.env.GMAIL_PASSWORD || '').trim().replace(/\s+/g, '');
 
   if (user && pass) {
-    // If Gmail account, service: 'gmail' automatically configures direct SSL on port 465
-    if (user.toLowerCase().includes('gmail') || !process.env.EMAIL_HOST) {
+    const isGmail = user.toLowerCase().includes('gmail') || !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('gmail');
+
+    if (isGmail) {
       return nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true, // SSL
         auth: {
           user,
           pass,
+        },
+        tls: {
+          rejectUnauthorized: false,
         },
         connectionTimeout: 10000,
         greetingTimeout: 10000,
@@ -27,12 +33,35 @@ const createTransporter = () => {
         user,
         pass,
       },
+      tls: {
+        rejectUnauthorized: false,
+      },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 10000,
     });
   }
   return null;
+};
+
+// Verify transporter at startup
+const testEmailConnection = async () => {
+  const user = (process.env.EMAIL_USER || process.env.GMAIL_USERNAME || '').trim();
+  const transporter = createTransporter();
+
+  if (!transporter) {
+    console.log(' [EmailService] SMTP not fully configured (missing EMAIL_USER or EMAIL_PASS). Codes will be logged to server console.');
+    return;
+  }
+
+  try {
+    await transporter.verify();
+    console.log(`[EmailService] Gmail SMTP connected successfully as: ${user}`);
+  } catch (error) {
+    console.warn(` [EmailService] Gmail SMTP Notice: ${error.message}`);
+    console.warn('    If Gmail blocked sign-in, ensure 2-Step Verification is ON and a Google App Password is used.');
+    console.warn('    Codes will always be displayed in the server terminal and returned to the app.');
+  }
 };
 
 // Generate 6-digit verification code
@@ -42,12 +71,12 @@ const generateVerificationCode = () => {
 
 // Send verification code
 const sendVerificationEmail = async (email, code, userName) => {
-  console.log('\n=============================================');
-  console.log(` EMAIL VERIFICATION DISPATCHED`);
+  console.log('\n=============================================================');
+  console.log('  EMAIL VERIFICATION CODE GENERATED');
   console.log(` Recipient: ${userName || 'User'} <${email}>`);
-  console.log(` 6-Digit Verification Code: ${code}`);
-  console.log(` Expires in 15 minutes`);
-  console.log('=============================================\n');
+  console.log(`  6-Digit Code: [ ${code} ] `);
+  console.log(' Expires in 15 minutes');
+  console.log('=============================================================\n');
 
   const transporter = createTransporter();
   if (!transporter) {
@@ -55,9 +84,9 @@ const sendVerificationEmail = async (email, code, userName) => {
   }
 
   try {
-    const senderUser = process.env.EMAIL_USER || process.env.GMAIL_USERNAME;
-    const fromAddress = process.env.EMAIL_FROM || (senderUser ? `"GroupShare App" <${senderUser.trim()}>` : '"GroupShare App" <no-reply@groupshare.local>');
-    await transporter.sendMail({
+    const senderUser = (process.env.EMAIL_USER || process.env.GMAIL_USERNAME || '').trim();
+    const fromAddress = process.env.EMAIL_FROM || (senderUser ? `"GroupShare App" <${senderUser}>` : '"GroupShare App" <no-reply@groupshare.local>');
+    const info = await transporter.sendMail({
       from: fromAddress,
       to: email,
       subject: 'Your GroupShare Email Verification Code',
@@ -73,9 +102,11 @@ const sendVerificationEmail = async (email, code, userName) => {
         </div>
       `,
     });
+    console.log(`[EmailService] Verification email successfully sent to ${email} (MessageId: ${info.messageId})`);
     return { success: true, mode: 'sent-smtp', code };
   } catch (error) {
-    console.error('[EmailService] SMTP error, logged to console:', error.message);
+    console.error(` [EmailService] SMTP error sending to ${email}:`, error.message);
+    console.log(`    Use the 6-digit code logged above: [ ${code} ]`);
     return { success: true, mode: 'console-logged', code };
   }
 };
@@ -129,4 +160,5 @@ module.exports = {
   sendVerificationEmail,
   sendGroupInviteEmail,
   sendOTPEmail,
+  testEmailConnection,
 };

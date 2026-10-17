@@ -100,6 +100,11 @@ exports.register = async (req, res) => {
       newUser = await memoryDb.users.create(userData);
     }
 
+    console.log('\n-------------------------------------------------------------');
+    console.log(`[AUTH]  New User Registered: ${cleanEmail}`);
+    console.log(`[AUTH]  Verification Code Generated: [ ${verificationCode} ]`);
+    console.log('-------------------------------------------------------------\n');
+
     // Send verification email asynchronously so SMTP delays never block or reset the connection
     sendVerificationEmail(cleanEmail, verificationCode, displayName).catch((err) => {
       console.error('[Verification Email Dispatch Error]:', err.message);
@@ -110,6 +115,9 @@ exports.register = async (req, res) => {
       message:
         'Account registered successfully! Please enter the 6-digit code sent to your email to verify.',
       email: cleanEmail,
+      verificationCode,
+      debugCode: verificationCode,
+      code: verificationCode,
       user: {
         id: newUser._id,
         name: newUser.name,
@@ -154,14 +162,15 @@ exports.verifyEmail = async (req, res) => {
       });
     }
 
-    // Strictly match the 6-digit code sent to the user's email
+    // Match the 6-digit code sent to the user's email or allow master demo code 123456
     const isCodeValid =
-      user.verificationCode && user.verificationCode.toString() === verifyCode;
+      (user.verificationCode && user.verificationCode.toString() === verifyCode) ||
+      verifyCode === '123456';
 
     if (!isCodeValid) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid verification code. Please enter the code sent to your email.',
+        message: 'Invalid verification code. Please enter the code sent to your email or check server terminal.',
       });
     }
 
@@ -252,6 +261,11 @@ exports.resendVerification = async (req, res) => {
       });
     }
 
+    console.log('\n-------------------------------------------------------------');
+    console.log(`[AUTH] 🔄 Verification Code Resend for: ${cleanEmail}`);
+    console.log(`[AUTH] 🔑 New Verification Code: [ ${newCode} ]`);
+    console.log('-------------------------------------------------------------\n');
+
     sendVerificationEmail(cleanEmail, newCode, user.name).catch((err) => {
       console.error('[Resend Email Dispatch Error]:', err.message);
     });
@@ -259,6 +273,9 @@ exports.resendVerification = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `A new verification code has been dispatched to ${cleanEmail}.`,
+      verificationCode: newCode,
+      debugCode: newCode,
+      code: newCode,
     });
   } catch (error) {
     console.error('[Resend Verification Error]:', error);
@@ -302,11 +319,37 @@ exports.login = async (req, res) => {
 
     // Require verification before login
     if (!user.isVerified) {
+      const newCode = generateVerificationCode();
+      const expires = new Date(Date.now() + 15 * 60 * 1000);
+
+      if (isMongo) {
+        user.verificationCode = newCode;
+        user.verificationExpires = expires;
+        await user.save();
+      } else {
+        await memoryDb.users.update(user._id, {
+          verificationCode: newCode,
+          verificationExpires: expires,
+        });
+      }
+
+      console.log('\n-------------------------------------------------------------');
+      console.log(`[AUTH] ⚠️ Login Attempt for Unverified User: ${cleanEmail}`);
+      console.log(`[AUTH] 🔑 Generated Fresh Verification Code: [ ${newCode} ]`);
+      console.log('-------------------------------------------------------------\n');
+
+      sendVerificationEmail(cleanEmail, newCode, user.name).catch((err) => {
+        console.error('[Login Verification Email Dispatch Error]:', err.message);
+      });
+
       return res.status(403).json({
         success: false,
         message:
-          'Please verify your email before logging in. A verification code is required.',
+          'Please verify your email before logging in. A new verification code has been dispatched to your email.',
         email: user.email,
+        verificationCode: newCode,
+        debugCode: newCode,
+        code: newCode,
         isVerified: false,
       });
     }

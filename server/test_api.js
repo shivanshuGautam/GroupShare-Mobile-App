@@ -1,12 +1,14 @@
 const http = require('http');
 
+const PORT = parseInt(process.env.PORT, 10) || 4500;
+
 const request = (path, method = 'GET', body = null, token = null) => {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
     const req = http.request(
       {
         hostname: 'localhost',
-        port: 5000,
+        port: PORT,
         path,
         method,
         headers: {

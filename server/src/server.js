@@ -1,11 +1,20 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+
+// Ensure server/.env is loaded reliably regardless of working directory
+const serverEnvPath = path.resolve(__dirname, '../.env');
+if (fs.existsSync(serverEnvPath)) {
+  require('dotenv').config({ path: serverEnvPath });
+} else {
+  require('dotenv').config();
+}
+
+const express = require('express');
+const cors = require('cors');
 const bcrypt = require('bcryptjs');
 
 const { connectDB, getDbStatus } = require('./config/db');
+const { testEmailConnection } = require('./services/emailService');
 const authRoutes = require('./routes/authRoutes');
 const groupRoutes = require('./routes/groupRoutes');
 const documentRoutes = require('./routes/documentRoutes');
@@ -132,6 +141,7 @@ app.use((err, req, res, next) => {
 const startServer = async () => {
   await connectDB();
   await seedDemoData();
+  await testEmailConnection();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(` GroupShare Server is running on http://localhost:${PORT}`);

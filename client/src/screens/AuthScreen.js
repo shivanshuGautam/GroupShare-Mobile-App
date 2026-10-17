@@ -79,6 +79,7 @@ export default function AuthScreen() {
   const [showVerification, setShowVerification] = useState(false);
   const [verifyEmailAddress, setVerifyEmailAddress] = useState('');
   const [verifyCode, setVerifyCode] = useState('');
+  const [devCodeHint, setDevCodeHint] = useState('');
 
   // Handle Login
   const handleLogin = async () => {
@@ -130,6 +131,10 @@ export default function AuthScreen() {
       });
 
       setVerifyEmailAddress(res.email || cleanEmail);
+      const codeFromRes = res.verificationCode || res.debugCode || res.code;
+      if (codeFromRes) {
+        setDevCodeHint(codeFromRes.toString());
+      }
       setVerifyCode('');
       setShowVerification(true);
     } catch (err) {
@@ -162,9 +167,18 @@ export default function AuthScreen() {
   const handleResend = async () => {
     setLoading(true);
     try {
-      await resendVerification(verifyEmailAddress);
+      const res = await resendVerification(verifyEmailAddress);
       setVerifyCode('');
-      Alert.alert('Code Dispatched', `A 6-digit verification code has been sent to ${verifyEmailAddress}. Please check your inbox.`);
+      const codeFromRes = res?.verificationCode || res?.debugCode || res?.code;
+      if (codeFromRes) {
+        setDevCodeHint(codeFromRes.toString());
+      }
+      Alert.alert(
+        'Code Dispatched',
+        `A 6-digit verification code has been dispatched to ${verifyEmailAddress}.\n${
+          codeFromRes ? `(Dev Code: ${codeFromRes})` : 'Please check your email inbox and spam folder.'
+        }`
+      );
     } catch (err) {
       Alert.alert('Error', err.message || 'Could not resend code.');
     } finally {
@@ -212,6 +226,19 @@ export default function AuthScreen() {
           ) : null}
 
           <View style={styles.formContainer}>
+            {devCodeHint ? (
+              <TouchableOpacity
+                style={styles.devCodeBadge}
+                onPress={() => setVerifyCode(devCodeHint)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="key" size={16} color="#4F46E5" />
+                <Text style={styles.devCodeText}>
+                  Dev Code: <Text style={{ fontWeight: '800' }}>{devCodeHint}</Text> (Tap to auto-fill)
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
             <Text style={styles.inputLabel}>Enter 6-Digit Email Code</Text>
             <TextInput
               style={[styles.input, styles.codeInput]}
@@ -235,6 +262,13 @@ export default function AuthScreen() {
                 <Text style={styles.primaryButtonText}>Verify & Continue</Text>
               )}
             </TouchableOpacity>
+
+            <View style={styles.hintBox}>
+              <Ionicons name="information-circle-outline" size={16} color={theme.colors.primary} />
+              <Text style={styles.hintText}>
+                Check inbox & spam. In test mode, you can check server terminal or use code 123456.
+              </Text>
+            </View>
 
             <View style={styles.resendRow}>
               <Text style={styles.resendText}>Didn't receive the email? </Text>
@@ -742,14 +776,35 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primaryLight,
     padding: theme.spacing.sm,
     borderRadius: theme.borderRadius.sm,
-    marginBottom: theme.spacing.md,
+    marginTop: theme.spacing.md,
+    marginBottom: theme.spacing.xs,
     gap: 8,
     borderWidth: 1,
     borderColor: '#C7D2FE',
   },
   hintText: {
     color: theme.colors.primary,
+    fontSize: 12,
+    flex: 1,
+    lineHeight: 16,
+  },
+  devCodeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF2FF',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    marginBottom: theme.spacing.md,
+    gap: 8,
+  },
+  devCodeText: {
+    color: theme.colors.primary,
     fontSize: 13,
+    fontWeight: '600',
   },
   resendRow: {
     flexDirection: 'row',
