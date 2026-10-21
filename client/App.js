@@ -7,9 +7,12 @@ import {
   ActivityIndicator,
   Platform,
   StatusBar as RNStatusBar,
+  LogBox,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+
+LogBox.ignoreLogs(['Response.blob() is using React Native']);
 
 import { theme } from './src/theme';
 import { AuthProvider, useAuth } from './src/context/AuthContext';

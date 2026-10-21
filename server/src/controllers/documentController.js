@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const mongoose = require('mongoose');
 const Document = require('../models/Document');
 const Group = require('../models/Group');
 const User = require('../models/User');
@@ -9,10 +10,60 @@ const memoryDb = require('../services/memoryDb');
 
 // Upload Document
 exports.uploadDocument = async (req, res) => {
+  let file = req.file;
   try {
     const userId = req.user.id;
-    const { groupId, title, description, accessPermission } = req.body;
-    const file = req.file;
+    const {
+      groupId,
+      title,
+      description,
+      accessPermission,
+      fileBase64,
+      fileName: rawFileName,
+      mimeType: rawMimeType,
+    } = req.body;
+
+    // Support Base64 JSON upload (resilient against mobile scoped storage / DocumentPicker cache issues)
+    if (!file && fileBase64) {
+      const buffer = Buffer.from(fileBase64, 'base64');
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      let ext = path.extname(rawFileName || '').toLowerCase();
+      const mime = (rawMimeType || '').toLowerCase();
+
+      if (!ext && mime) {
+        if (mime === 'image/png') ext = '.png';
+        else if (mime === 'image/jpeg' || mime === 'image/jpg') ext = '.jpg';
+        else if (mime === 'image/webp') ext = '.webp';
+        else if (mime === 'image/gif') ext = '.gif';
+        else if (mime === 'application/pdf' || mime === 'application/x-pdf') ext = '.pdf';
+        else if (
+          mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          mime.includes('wordprocessingml')
+        ) ext = '.docx';
+        else if (mime === 'application/msword' || mime === 'application/vnd.ms-word') ext = '.doc';
+        else if (mime === 'text/plain') ext = '.txt';
+        else if (mime.startsWith('image/')) ext = '.' + mime.split('/')[1];
+      }
+
+      const cleanExt = ext || '.bin';
+      const rawBase = path.basename(rawFileName || 'document', ext);
+      const cleanBaseName = rawBase.replace(/[^a-zA-Z0-9_-]/g, '_') || 'document';
+      const diskFileName = `${cleanBaseName}-${uniqueSuffix}${cleanExt}`;
+
+      const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+      const diskFilePath = path.join(uploadsDir, diskFileName);
+
+      fs.writeFileSync(diskFilePath, buffer);
+
+      file = {
+        path: diskFilePath,
+        filename: diskFileName,
+        originalname: rawFileName || diskFileName,
+        mimetype: rawMimeType || 'application/octet-stream',
+        size: buffer.length,
+      };
+    }
 
     if (!file) {
       return res.status(400).json({
@@ -21,9 +72,9 @@ exports.uploadDocument = async (req, res) => {
       });
     }
 
-    if (!groupId || !title) {
+    if (!groupId || !title || !title.trim()) {
       // Remove uploaded file if validation fails
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
       return res.status(400).json({
         success: false,
         message: 'Group ID and Document Title are required.',
@@ -31,6 +82,15 @@ exports.uploadDocument = async (req, res) => {
     }
 
     const isMongo = getDbStatus();
+
+    // Verify valid MongoDB ObjectId if running on MongoDB
+    if (isMongo && !mongoose.Types.ObjectId.isValid(groupId)) {
+      if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Group ID format.',
+      });
+    }
 
     // Verify group and user membership
     let group;
@@ -41,16 +101,17 @@ exports.uploadDocument = async (req, res) => {
     }
 
     if (!group) {
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
       return res.status(404).json({ success: false, message: 'Group not found.' });
     }
 
-    const myMembership = group.members.find(
-      (m) => (m.user._id || m.user).toString() === userId.toString()
-    );
+    const myMembership = group.members.find((m) => {
+      const memberUserId = m.user?._id || m.user;
+      return memberUserId && memberUserId.toString() === userId.toString();
+    });
 
     if (!myMembership) {
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
       return res.status(403).json({
         success: false,
         message: 'Access denied. You must be a group member to upload documents.',
@@ -58,13 +119,15 @@ exports.uploadDocument = async (req, res) => {
     }
 
     // Determine uploader name
-    let uploaderName = req.user.email.split('@')[0];
-    if (isMongo) {
-      const uploaderUser = await User.findById(userId);
-      if (uploaderUser) uploaderName = uploaderUser.name;
-    } else {
-      const uploaderUser = await memoryDb.users.findById(userId);
-      if (uploaderUser) uploaderName = uploaderUser.name;
+    let uploaderName = req.user.name || req.user.email?.split('@')[0] || 'User';
+    if (!uploaderName || uploaderName === 'User') {
+      if (isMongo) {
+        const uploaderUser = await User.findById(userId);
+        if (uploaderUser && uploaderUser.name) uploaderName = uploaderUser.name;
+      } else {
+        const uploaderUser = await memoryDb.users.findById(userId);
+        if (uploaderUser && uploaderUser.name) uploaderName = uploaderUser.name;
+      }
     }
 
     // Permission setting: if non-admin tries to set admin_only, allowed or fallback
@@ -75,9 +138,9 @@ exports.uploadDocument = async (req, res) => {
     const documentData = {
       title: title.trim(),
       description: (description || '').trim(),
-      originalName: file.originalname,
+      originalName: file.originalname || 'document',
       fileName: file.filename,
-      mimeType: file.mimetype,
+      mimeType: file.mimetype || 'application/octet-stream',
       size: file.size,
       group: groupId,
       uploadedBy: userId,
@@ -93,28 +156,36 @@ exports.uploadDocument = async (req, res) => {
     }
 
     // Create notifications for all other members of the group
-    const recipients = group.members.filter(
-      (m) => (m.user._id || m.user).toString() !== userId.toString()
-    );
+    // Handled in a separate try-catch so notification failures never cause the upload to fail
+    try {
+      const recipients = group.members.filter((m) => {
+        const memberUserId = m.user?._id || m.user;
+        return memberUserId && memberUserId.toString() !== userId.toString();
+      });
 
-    for (const recipient of recipients) {
-      const targetUserId = recipient.user._id || recipient.user;
-      const notifData = {
-        user: targetUserId,
-        title: 'New Group Document Uploaded',
-        message: `${uploaderName} uploaded "${title}" in "${group.name}".`,
-        type: 'doc_uploaded',
-        group: group._id,
-        groupName: group.name,
-        document: doc._id,
-        documentTitle: doc.title,
-      };
+      for (const recipient of recipients) {
+        const targetUserId = recipient.user?._id || recipient.user;
+        if (!targetUserId) continue;
 
-      if (isMongo) {
-        await Notification.create(notifData);
-      } else {
-        await memoryDb.notifications.create(notifData);
+        const notifData = {
+          user: targetUserId,
+          title: 'New Group Document Uploaded',
+          message: `${uploaderName} uploaded "${title.trim()}" in "${group.name}".`,
+          type: 'doc_uploaded',
+          group: group._id,
+          groupName: group.name,
+          document: doc._id,
+          documentTitle: doc.title,
+        };
+
+        if (isMongo) {
+          await Notification.create(notifData);
+        } else {
+          await memoryDb.notifications.create(notifData);
+        }
       }
+    } catch (notifErr) {
+      console.warn('[Upload Document] Notification dispatch notice (non-fatal):', notifErr.message);
     }
 
     return res.status(201).json({
@@ -135,8 +206,13 @@ exports.uploadDocument = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[Upload Document Error]:', error);
-    return res.status(500).json({ success: false, message: error.message });
+    if (file && file.path && fs.existsSync(file.path)) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (_) {}
+    }
+    console.error('[Upload Document Error]:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Internal server error while uploading document.' });
   }
 };
 
@@ -302,7 +378,10 @@ exports.deleteDocument = async (req, res) => {
     }
 
     const myMembership = group
-      ? group.members.find((m) => (m.user._id || m.user).toString() === userId.toString())
+      ? group.members.find((m) => {
+          const memberUserId = m.user?._id || m.user;
+          return memberUserId && memberUserId.toString() === userId.toString();
+        })
       : null;
 
     const isAdmin = myMembership && myMembership.role === 'admin';
@@ -315,10 +394,18 @@ exports.deleteDocument = async (req, res) => {
       });
     }
 
-    // Delete file from disk
-    const filePath = path.join(__dirname, '..', '..', 'uploads', doc.fileName);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    // Delete file from disk only if not referenced by another document
+    const otherReferences = isMongo
+      ? await Document.countDocuments({ fileName: doc.fileName, _id: { $ne: id } })
+      : memoryDb.rawStore.documents.filter((d) => d.fileName === doc.fileName && d._id.toString() !== id.toString()).length;
+
+    if (otherReferences === 0) {
+      const filePath = path.join(__dirname, '..', '..', 'uploads', doc.fileName);
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (_) {}
+      }
     }
 
     if (isMongo) {

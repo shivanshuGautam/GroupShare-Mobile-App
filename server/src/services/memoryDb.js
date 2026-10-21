@@ -85,6 +85,12 @@ const groups = {
     };
     return memoryStore.groups[index];
   },
+  delete: async (id) => {
+    const index = memoryStore.groups.findIndex((g) => g._id.toString() === id.toString());
+    if (index === -1) return false;
+    memoryStore.groups.splice(index, 1);
+    return true;
+  },
 };
 
 // Documents
@@ -106,7 +112,7 @@ const documents = {
       updatedAt: new Date(),
     };
     memoryStore.documents.push(doc);
-    return doc; A
+    return doc;
   },
   findByGroup: async (groupId) => {
     return memoryStore.documents.filter((d) => d.group.toString() === groupId.toString());
@@ -118,6 +124,12 @@ const documents = {
     const index = memoryStore.documents.findIndex((d) => d._id.toString() === id.toString());
     if (index === -1) return false;
     memoryStore.documents.splice(index, 1);
+    return true;
+  },
+  deleteByGroup: async (groupId) => {
+    memoryStore.documents = memoryStore.documents.filter(
+      (d) => d.group.toString() !== groupId.toString()
+    );
     return true;
   },
 };
@@ -160,6 +172,12 @@ const notifications = {
         n.isRead = true;
       }
     });
+    return true;
+  },
+  deleteByGroup: async (groupId) => {
+    memoryStore.notifications = memoryStore.notifications.filter(
+      (n) => (n.group ? n.group.toString() !== groupId.toString() : true)
+    );
     return true;
   },
 };

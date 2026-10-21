@@ -1,6 +1,10 @@
 const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
+const mongoose = require('mongoose');
 const Group = require('../models/Group');
 const User = require('../models/User');
+const Document = require('../models/Document');
 const Notification = require('../models/Notification');
 const { getDbStatus } = require('../config/db');
 const memoryDb = require('../services/memoryDb');
@@ -310,5 +314,113 @@ exports.inviteMember = async (req, res) => {
   } catch (error) {
     console.error('[Invite Member Error]:', error);
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Delete Group (Admin only)
+exports.deleteGroup = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { groupId } = req.params;
+
+    if (!groupId) {
+      return res.status(400).json({ success: false, message: 'Group ID is required.' });
+    }
+
+    const isMongo = getDbStatus();
+
+    if (isMongo && !mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Group ID format.' });
+    }
+
+    let group;
+    if (isMongo) {
+      group = await Group.findById(groupId);
+    } else {
+      group = await memoryDb.groups.findById(groupId);
+    }
+
+    if (!group) {
+      return res.status(404).json({ success: false, message: 'Group not found.' });
+    }
+
+    // Verify creator or admin permission
+    const isCreator = group.createdBy && group.createdBy.toString() === userId.toString();
+    const myMembership = group.members.find((m) => {
+      const memberUserId = m.user?._id || m.user;
+      return memberUserId && memberUserId.toString() === userId.toString();
+    });
+    const isAdmin = isCreator || (myMembership && myMembership.role === 'admin');
+
+    if (!isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Permission denied. Only group administrators can delete this group.',
+      });
+    }
+
+    const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+
+    // 1. Clean up group documents and persistent files
+    if (isMongo) {
+      const groupDocs = await Document.find({ group: groupId });
+      for (const doc of groupDocs) {
+        if (doc.fileName) {
+          // Check if physical file is shared/referenced by other documents
+          const otherReferences = await Document.countDocuments({
+            fileName: doc.fileName,
+            group: { $ne: groupId },
+          });
+          if (otherReferences === 0) {
+            const filePath = path.join(uploadsDir, doc.fileName);
+            if (fs.existsSync(filePath)) {
+              try {
+                fs.unlinkSync(filePath);
+              } catch (fileErr) {
+                console.warn('[Delete Group] Notice unlinking file:', fileErr.message);
+              }
+            }
+          }
+        }
+      }
+      // Remove document records from MongoDB
+      await Document.deleteMany({ group: groupId });
+
+      // 2. Clean up notifications referencing this group
+      await Notification.deleteMany({ group: groupId });
+
+      // 3. Delete the group from MongoDB
+      await Group.findByIdAndDelete(groupId);
+    } else {
+      const groupDocs = await memoryDb.documents.findByGroup(groupId);
+      for (const doc of groupDocs) {
+        if (doc.fileName) {
+          const otherDocs = memoryDb.rawStore.documents.filter(
+            (d) => d.fileName === doc.fileName && d.group.toString() !== groupId.toString()
+          );
+          if (otherDocs.length === 0) {
+            const filePath = path.join(uploadsDir, doc.fileName);
+            if (fs.existsSync(filePath)) {
+              try {
+                fs.unlinkSync(filePath);
+              } catch (_) {}
+            }
+          }
+        }
+      }
+      await memoryDb.documents.deleteByGroup(groupId);
+      await memoryDb.notifications.deleteByGroup(groupId);
+      await memoryDb.groups.delete(groupId);
+    }
+
+    console.log(`[Group Deleted]: ID ${groupId} by Admin ${req.user.email}`);
+    return res.status(200).json({
+      success: true,
+      message: `Group "${group.name}" and its associated data have been deleted successfully.`,
+      deletedGroupId: groupId,
+    });
+  } catch (error) {
+    console.error('[Delete Group Error]:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Internal server error while deleting group.' });
   }
 };

@@ -43,14 +43,18 @@ export default function GroupDetailsScreen({ group, onBack }) {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviting, setInviting] = useState(false);
 
-  const isAdmin = (groupDetails.myRole || group.myRole) === 'admin';
+  const targetGroupId = groupDetails?.id || groupDetails?._id || group?.id || group?._id;
+  const isAdmin = (groupDetails?.myRole || group?.myRole) === 'admin';
+  const [deletingGroup, setDeletingGroup] = useState(false);
 
   // Fetch full details and documents
   const loadData = useCallback(async () => {
+    const idToFetch = groupDetails?.id || groupDetails?._id || group?.id || group?._id;
+    if (!idToFetch) return;
     try {
       const [detailsRes, docsRes] = await Promise.all([
-        groupsApi.getGroupDetails(group.id),
-        documentsApi.getDocuments(group.id),
+        groupsApi.getGroupDetails(idToFetch),
+        documentsApi.getDocuments(idToFetch),
       ]);
 
       if (detailsRes.group) {
@@ -67,7 +71,51 @@ export default function GroupDetailsScreen({ group, onBack }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [group.id]);
+  }, [group?.id, group?._id]);
+
+  // Confirm and Delete Group (Admin only)
+  const confirmDeleteGroup = () => {
+    Alert.alert(
+      'Delete Group',
+      'Are you sure you want to delete this group? This action cannot be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete Group',
+          style: 'destructive',
+          onPress: handleDeleteGroup,
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+  const handleDeleteGroup = async () => {
+    if (deletingGroup) return;
+    const currentGroupId = groupDetails?.id || groupDetails?._id || group?.id || group?._id;
+    if (!currentGroupId) {
+      showToast.error('Delete Error', 'Group identifier could not be determined.');
+      return;
+    }
+
+    setDeletingGroup(true);
+    try {
+      const res = await groupsApi.deleteGroup(currentGroupId);
+      showToast.success('Group Deleted', res?.message || 'Workspace was deleted successfully.');
+      if (typeof onBack === 'function') {
+        onBack({ deletedGroupId: currentGroupId });
+      }
+    } catch (err) {
+      if (__DEV__) {
+        console.log('[GroupDetailsScreen] Delete group error:', err);
+      }
+      showToast.error('Delete Failed', err);
+      setDeletingGroup(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -137,10 +185,16 @@ export default function GroupDetailsScreen({ group, onBack }) {
       return;
     }
 
+    const currentGroupId = groupDetails?.id || groupDetails?._id || group?.id || group?._id;
+    if (!currentGroupId) {
+      showToast.error('Upload Error', 'Group ID could not be identified.');
+      return;
+    }
+
     setUploading(true);
     try {
-      await documentsApi.uploadDocument(
-        group.id,
+      const res = await documentsApi.uploadDocument(
+        currentGroupId,
         selectedFile,
         docTitle.trim(),
         docDesc.trim(),
@@ -152,9 +206,12 @@ export default function GroupDetailsScreen({ group, onBack }) {
       setDocTitle('');
       setDocDesc('');
       setDocPermission('all');
-      loadData();
-      showToast.success('Upload Complete', 'Document uploaded! Group members have been notified.');
+      await loadData();
+      showToast.success('Upload Complete', res?.message || 'Document uploaded! Group members have been notified.');
     } catch (err) {
+      if (__DEV__) {
+        console.log('[GroupDetailsScreen] Upload error:', err);
+      }
       showToast.error('Upload Failed', err);
     } finally {
       setUploading(false);
@@ -190,7 +247,7 @@ export default function GroupDetailsScreen({ group, onBack }) {
 
     setInviting(true);
     try {
-      const res = await groupsApi.inviteMember(group.id, inviteEmail.trim());
+      const res = await groupsApi.inviteMember(targetGroupId, inviteEmail.trim());
       setIsInviteModalOpen(false);
       setInviteEmail('');
       loadData();
@@ -210,8 +267,28 @@ export default function GroupDetailsScreen({ group, onBack }) {
           <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="arrow-back" size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
-          <View style={styles.categoryBadge}>
-            <Text style={styles.categoryText}>{groupDetails.category || 'General'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={styles.categoryBadge}>
+              <Text style={styles.categoryText}>{groupDetails.category || 'General'}</Text>
+            </View>
+            {isAdmin ? (
+              <TouchableOpacity
+                onPress={confirmDeleteGroup}
+                style={styles.deleteHeaderBtn}
+                disabled={deletingGroup}
+                activeOpacity={0.7}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                {deletingGroup ? (
+                  <ActivityIndicator size="small" color="#DC2626" />
+                ) : (
+                  <View style={styles.deleteHeaderBtnInner}>
+                    <Ionicons name="trash-outline" size={15} color="#DC2626" />
+                    <Text style={styles.deleteHeaderBtnText}>Delete Group</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
 
@@ -410,6 +487,36 @@ export default function GroupDetailsScreen({ group, onBack }) {
               );
             }}
             contentContainerStyle={styles.listContent}
+            ListFooterComponent={
+              isAdmin ? (
+                <View style={styles.adminDangerCard}>
+                  <View style={styles.adminDangerHeader}>
+                    <Ionicons name="warning-outline" size={20} color="#DC2626" />
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={styles.adminDangerTitle}>Administrator Controls</Text>
+                      <Text style={styles.adminDangerSub}>
+                        Deleting this group permanently deletes all documents, invitations, and notifications for all members.
+                      </Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.adminDeleteGroupBtn}
+                    onPress={confirmDeleteGroup}
+                    disabled={deletingGroup}
+                    activeOpacity={0.8}
+                  >
+                    {deletingGroup ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="trash" size={16} color="#FFF" />
+                        <Text style={styles.adminDeleteGroupBtnText}>Delete This Group</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              ) : null
+            }
           />
         </View>
       )}
@@ -1104,6 +1211,62 @@ const styles = StyleSheet.create({
   submitModalBtnText: {
     color: '#FFF',
     fontSize: 15,
+    fontWeight: '700',
+  },
+  deleteHeaderBtn: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: theme.borderRadius.full,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteHeaderBtnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  deleteHeaderBtnText: {
+    color: '#DC2626',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  adminDangerCard: {
+    marginTop: theme.spacing.lg,
+    padding: theme.spacing.md,
+    backgroundColor: '#FEF2F2',
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  adminDangerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: theme.spacing.md,
+  },
+  adminDangerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  adminDangerSub: {
+    fontSize: 12,
+    color: '#7F1D1D',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  adminDeleteGroupBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#DC2626',
+    paddingVertical: 12,
+    borderRadius: theme.borderRadius.sm,
+    gap: 8,
+  },
+  adminDeleteGroupBtnText: {
+    color: '#FFF',
+    fontSize: 14,
     fontWeight: '700',
   },
 });

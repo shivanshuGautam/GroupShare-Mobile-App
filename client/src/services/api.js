@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, NativeModules } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { readAssetAsBase64 } from '../utils/fileUtils';
 
 // Automatically detect host computer IP when running via Metro / Expo Go on LAN
 const getDevHostIp = () => {
@@ -92,7 +93,7 @@ export const testServerConnection = async (url) => {
 };
 
 // Generic HTTP request helper
-const apiRequest = async (path, method = 'GET', body = null, isFormData = false) => {
+const apiRequest = async (path, method = 'GET', body = null, isFormData = false, customTimeoutMs = null) => {
   const token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
   const baseUrl = await getBaseUrl();
 
@@ -114,7 +115,8 @@ const apiRequest = async (path, method = 'GET', body = null, isFormData = false)
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+  const timeoutMs = customTimeoutMs || (isFormData ? 60000 : 15000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   options.signal = controller.signal;
 
   try {
@@ -135,7 +137,7 @@ const apiRequest = async (path, method = 'GET', body = null, isFormData = false)
     clearTimeout(timeoutId);
     let friendlyMessage = error.message;
     if (error.name === 'AbortError' || error.message?.includes('canceled')) {
-      friendlyMessage = `Could not reach backend at ${baseUrl}. Ensure backend is running on port 4500 and device IP is correct.`;
+      friendlyMessage = `Request timed out connecting to backend at ${baseUrl}. Ensure backend is running on port 4500 and device IP is correct.`;
     }
     if (__DEV__) {
       console.log(`[API Network Notice on ${path}]:`, friendlyMessage);
@@ -235,6 +237,10 @@ export const groupsApi = {
   inviteMember: async (groupId, email) => {
     return await apiRequest(`/api/groups/${groupId}/invite`, 'POST', { email });
   },
+
+  deleteGroup: async (groupId) => {
+    return await apiRequest(`/api/groups/${groupId}`, 'DELETE');
+  },
 };
 
 // Document Sharing & Management Services
@@ -244,13 +250,7 @@ export const documentsApi = {
   },
 
   uploadDocument: async (groupId, file, title, description, accessPermission) => {
-    const formData = new FormData();
-    formData.append('groupId', groupId);
-    formData.append('title', title);
-    formData.append('description', description || '');
-    formData.append('accessPermission', accessPermission || 'all');
-
-    let fileName = file.name || 'file';
+    let fileName = file.name || 'document';
     let mimeType = file.mimeType || '';
 
     if (!mimeType) {
@@ -261,23 +261,62 @@ export const documentsApi = {
       else if (lower.endsWith('.gif')) mimeType = 'image/gif';
       else if (lower.endsWith('.pdf')) mimeType = 'application/pdf';
       else if (lower.endsWith('.docx')) mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      else mimeType = 'image/jpeg';
+      else if (lower.endsWith('.doc')) mimeType = 'application/msword';
+      else if (lower.endsWith('.txt')) mimeType = 'text/plain';
+      else mimeType = 'application/octet-stream';
     }
 
     if (!fileName.includes('.')) {
       if (mimeType.includes('png')) fileName += '.png';
       else if (mimeType.includes('webp')) fileName += '.webp';
       else if (mimeType.includes('pdf')) fileName += '.pdf';
+      else if (mimeType.includes('wordprocessingml') || mimeType.includes('docx')) fileName += '.docx';
+      else if (mimeType.includes('msword')) fileName += '.doc';
       else fileName += '.jpg';
     }
 
+    // Strategy 1: Safe Base64 upload via readAssetAsBase64
+    // Completely bypasses Android Expo Go "Location isn't readable" java.io.IOException
+    try {
+      const assetData = await readAssetAsBase64(file);
+      if (assetData && assetData.base64) {
+        return await apiRequest(
+          '/api/documents/upload',
+          'POST',
+          {
+            groupId: String(groupId),
+            title: String(title),
+            description: String(description || ''),
+            accessPermission: String(accessPermission || 'all'),
+            fileBase64: assetData.base64,
+            fileName,
+            mimeType: assetData.mimeType || mimeType,
+          },
+          false,
+          60000
+        );
+      }
+    } catch (readErr) {
+      if (__DEV__) {
+        console.log('[uploadDocument] Base64 conversion notice, trying fallback methods:', readErr?.message);
+      }
+    }
+
+    // Strategy 2: FormData with fetch (normalized URI)
+    const formData = new FormData();
+    formData.append('groupId', String(groupId));
+    formData.append('title', String(title));
+    formData.append('description', String(description || ''));
+    formData.append('accessPermission', String(accessPermission || 'all'));
+
+    const normalizedUri = Platform.OS === 'android' ? file.uri : file.uri.replace('file://', '');
     formData.append('file', {
-      uri: file.uri,
+      uri: normalizedUri,
       name: fileName,
       type: mimeType,
     });
 
-    return await apiRequest('/api/documents/upload', 'POST', formData, true);
+    return await apiRequest('/api/documents/upload', 'POST', formData, true, 60000);
   },
 
   deleteDocument: async (docId) => {
@@ -316,14 +355,22 @@ export const documentsApi = {
 // Notification Services
 export const notificationsApi = {
   getNotifications: async () => {
+    const token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
+    if (!token) {
+      return { success: true, notifications: [], unreadCount: 0 };
+    }
     return await apiRequest('/api/notifications');
   },
 
   markAsRead: async (id) => {
+    const token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
+    if (!token) return { success: false, message: 'Not authenticated' };
     return await apiRequest(`/api/notifications/${id}/read`, 'PUT');
   },
 
   markAllAsRead: async () => {
+    const token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
+    if (!token) return { success: false, message: 'Not authenticated' };
     return await apiRequest('/api/notifications/read/all', 'PUT');
   },
 };
