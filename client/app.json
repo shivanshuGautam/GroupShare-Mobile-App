@@ -31,6 +31,12 @@
     },
     "plugins": [
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "8d222109-b88b-438a-bea0-65f59eece19c"
+      }
+    },
+    "owner": "shivanshugautam199"
   }
 }

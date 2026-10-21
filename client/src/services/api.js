@@ -28,11 +28,11 @@ const getDevHostIp = () => {
 
 const detectedLanIp = getDevHostIp();
 
-export const DEFAULT_SERVER_URL = detectedLanIp
-  ? `http://${detectedLanIp}:4500`
-  : Platform.OS === 'android'
-    ? 'http://10.0.2.2:4500'
-    : 'http://localhost:4500';
+export const DEFAULT_SERVER_URL =
+  process.env.EXPO_PUBLIC_API_URL?.trim() ||
+  (detectedLanIp
+    ? `http://${detectedLanIp}:4500`
+    : 'https://groupshare-mobile-app.onrender.com');
 
 export const STORAGE_KEYS = {
   TOKEN: '@groupshare_token',
