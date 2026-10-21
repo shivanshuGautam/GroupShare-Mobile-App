@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Ensure server/.env is loaded reliably regardless of working directory
+// MongoDB Atlas Active Connection
 const serverEnvPath = path.resolve(__dirname, '../.env');
 if (fs.existsSync(serverEnvPath)) {
   require('dotenv').config({ path: serverEnvPath });

@@ -1,4 +1,12 @@
 const mongoose = require("mongoose");
+const dns = require("dns");
+
+// Fix for Windows / local Wi-Fi DNS querySrv ECONNREFUSED error
+try {
+  dns.setServers(["8.8.8.8", "8.8.4.4"]);
+} catch (e) {
+  // ignore
+}
 
 let isConnected = false;
 
