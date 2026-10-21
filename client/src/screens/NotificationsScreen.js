@@ -14,6 +14,7 @@ import { theme } from '../theme';
 import NotificationCard from '../components/NotificationCard';
 import { notificationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import showToast from '../services/toast';
 
 export default function NotificationsScreen() {
   const { refreshNotifications } = useAuth();
@@ -28,7 +29,9 @@ export default function NotificationsScreen() {
         setNotifications(res.notifications);
       }
     } catch (err) {
-      console.warn('Failed to fetch notifications:', err.message);
+      if (__DEV__) {
+        console.log('[NotificationsScreen] Failed to fetch notifications:', err?.message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -54,7 +57,9 @@ export default function NotificationsScreen() {
       );
       refreshNotifications();
     } catch (err) {
-      console.warn('Could not mark read:', err);
+      if (__DEV__) {
+        console.log('[NotificationsScreen] Could not mark read:', err);
+      }
     }
   };
 
@@ -63,9 +68,9 @@ export default function NotificationsScreen() {
       await notificationsApi.markAllAsRead();
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       refreshNotifications();
-      Alert.alert('Done', 'All notifications marked as read.');
+      showToast.success('Activity Alerts', 'All notifications marked as read.');
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast.error('Action Failed', err);
     }
   };
 

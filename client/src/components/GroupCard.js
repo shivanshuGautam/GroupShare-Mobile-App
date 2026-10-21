@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../theme';
 
@@ -39,9 +39,20 @@ export default function GroupCard({ group, onPress }) {
         </View>
       </View>
 
-      <Text style={styles.name} numberOfLines={1}>
-        {group.name}
-      </Text>
+      <View style={styles.groupHeaderRow}>
+        {group.avatar ? (
+          <Image source={{ uri: group.avatar }} style={styles.groupAvatar} />
+        ) : (
+          <View style={styles.groupIconBox}>
+            <Ionicons name="folder-outline" size={18} color={theme.colors.primary} />
+          </View>
+        )}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.name} numberOfLines={1}>
+            {group.name}
+          </Text>
+        </View>
+      </View>
 
       {group.description ? (
         <Text style={styles.description} numberOfLines={2}>
@@ -127,12 +138,31 @@ const styles = StyleSheet.create({
   memberText: {
     color: '#4338CA',
   },
-  name: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
+  groupHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginTop: 6,
     marginBottom: 4,
+  },
+  groupAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.surfaceSubtle,
+  },
+  groupIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  name: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
   },
   description: {
     fontSize: 13,

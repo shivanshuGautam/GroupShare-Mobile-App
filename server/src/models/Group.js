@@ -69,6 +69,10 @@ const GroupSchema = new mongoose.Schema(
       type: String,
       default: 'General',
     },
+    avatar: {
+      type: String,
+      default: '',
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

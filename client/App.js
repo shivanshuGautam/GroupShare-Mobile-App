@@ -19,6 +19,8 @@ import GroupsScreen from './src/screens/GroupsScreen';
 import GroupDetailsScreen from './src/screens/GroupDetailsScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import Toast from 'react-native-toast-message';
+import { toastConfig } from './src/components/Toast/ToastConfig';
 
 function MainApp() {
   const { user, isLoading, unreadCount } = useAuth();
@@ -185,6 +187,7 @@ export default function App() {
   return (
     <AuthProvider>
       <MainApp />
+      <Toast config={toastConfig} />
     </AuthProvider>
   );
 }

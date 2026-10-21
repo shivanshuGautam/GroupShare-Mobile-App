@@ -334,8 +334,8 @@ exports.login = async (req, res) => {
       }
 
       console.log('\n-------------------------------------------------------------');
-      console.log(`[AUTH] ⚠️ Login Attempt for Unverified User: ${cleanEmail}`);
-      console.log(`[AUTH] 🔑 Generated Fresh Verification Code: [ ${newCode} ]`);
+      console.log(`[AUTH]  Login Attempt for Unverified User: ${cleanEmail}`);
+      console.log(`[AUTH]  Generated Fresh Verification Code: [ ${newCode} ]`);
       console.log('-------------------------------------------------------------\n');
 
       sendVerificationEmail(cleanEmail, newCode, user.name).catch((err) => {

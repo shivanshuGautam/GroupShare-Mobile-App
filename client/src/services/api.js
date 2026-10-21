@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, NativeModules } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 // Automatically detect host computer IP when running via Metro / Expo Go on LAN
@@ -30,8 +30,8 @@ const detectedLanIp = getDevHostIp();
 export const DEFAULT_SERVER_URL = detectedLanIp
   ? `http://${detectedLanIp}:4500`
   : Platform.OS === 'android'
-  ? 'http://10.0.2.2:4500'
-  : 'http://localhost:4500';
+    ? 'http://10.0.2.2:4500'
+    : 'http://localhost:4500';
 
 export const STORAGE_KEYS = {
   TOKEN: '@groupshare_token',
@@ -137,7 +137,9 @@ const apiRequest = async (path, method = 'GET', body = null, isFormData = false)
     if (error.name === 'AbortError' || error.message?.includes('canceled')) {
       friendlyMessage = `Could not reach backend at ${baseUrl}. Ensure backend is running on port 4500 and device IP is correct.`;
     }
-    console.warn(`[API Network Notice on ${path}]:`, friendlyMessage);
+    if (__DEV__) {
+      console.log(`[API Network Notice on ${path}]:`, friendlyMessage);
+    }
     const err = new Error(friendlyMessage);
     err.originalError = error;
     throw err;
@@ -247,10 +249,32 @@ export const documentsApi = {
     formData.append('title', title);
     formData.append('description', description || '');
     formData.append('accessPermission', accessPermission || 'all');
+
+    let fileName = file.name || 'file';
+    let mimeType = file.mimeType || '';
+
+    if (!mimeType) {
+      const lower = fileName.toLowerCase();
+      if (lower.endsWith('.png')) mimeType = 'image/png';
+      else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
+      else if (lower.endsWith('.webp')) mimeType = 'image/webp';
+      else if (lower.endsWith('.gif')) mimeType = 'image/gif';
+      else if (lower.endsWith('.pdf')) mimeType = 'application/pdf';
+      else if (lower.endsWith('.docx')) mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      else mimeType = 'image/jpeg';
+    }
+
+    if (!fileName.includes('.')) {
+      if (mimeType.includes('png')) fileName += '.png';
+      else if (mimeType.includes('webp')) fileName += '.webp';
+      else if (mimeType.includes('pdf')) fileName += '.pdf';
+      else fileName += '.jpg';
+    }
+
     formData.append('file', {
       uri: file.uri,
-      name: file.name,
-      type: file.mimeType || 'application/octet-stream',
+      name: fileName,
+      type: mimeType,
     });
 
     return await apiRequest('/api/documents/upload', 'POST', formData, true);
@@ -281,7 +305,9 @@ export const documentsApi = {
       }
       return { success: false, message: 'Sharing not available on this device.' };
     } catch (e) {
-      console.warn('View/Share error:', e.message);
+      if (__DEV__) {
+        console.log('[API View/Share error]:', e?.message);
+      }
       throw e;
     }
   },

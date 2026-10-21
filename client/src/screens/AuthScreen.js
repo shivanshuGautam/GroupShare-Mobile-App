@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import { getBaseUrl, setBaseUrl, testServerConnection } from '../services/api';
+import showToast from '../services/toast';
 
 export default function AuthScreen() {
   const { login, register, verifyEmail, resendVerification } = useAuth();
@@ -45,7 +46,7 @@ export default function AuthScreen() {
     setCurrentServerUrl(clean);
     setTempServerUrl(clean);
     setShowServerConfig(false);
-    Alert.alert('Server URL Updated', `Backend API set to:\n${clean}`);
+    showToast.success('Server URL Updated', `Backend API set to: ${clean}`);
   };
 
   const handleTestConnection = async () => {
@@ -173,14 +174,14 @@ export default function AuthScreen() {
       if (codeFromRes) {
         setDevCodeHint(codeFromRes.toString());
       }
-      Alert.alert(
+      showToast.success(
         'Code Dispatched',
-        `A 6-digit verification code has been dispatched to ${verifyEmailAddress}.\n${
-          codeFromRes ? `(Dev Code: ${codeFromRes})` : 'Please check your email inbox and spam folder.'
-        }`
+        codeFromRes
+          ? `Code sent to ${verifyEmailAddress} (Dev: ${codeFromRes})`
+          : `Code sent to ${verifyEmailAddress}. Please check your inbox.`
       );
     } catch (err) {
-      Alert.alert('Error', err.message || 'Could not resend code.');
+      showToast.error('Resend Failed', err);
     } finally {
       setLoading(false);
     }

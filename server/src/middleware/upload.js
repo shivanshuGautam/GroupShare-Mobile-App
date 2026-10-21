@@ -14,31 +14,51 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    const baseName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
-    cb(null, `${baseName}-${uniqueSuffix}${ext}`);
+    let ext = path.extname(file.originalname);
+    if (!ext && file.mimetype) {
+      if (file.mimetype === 'image/png') ext = '.png';
+      else if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') ext = '.jpg';
+      else if (file.mimetype === 'image/webp') ext = '.webp';
+      else if (file.mimetype === 'application/pdf') ext = '.pdf';
+      else if (file.mimetype.startsWith('image/')) ext = '.' + file.mimetype.split('/')[1];
+    }
+    const cleanExt = ext || '.bin';
+    const baseName = path.basename(file.originalname || 'file', ext).replace(/[^a-zA-Z0-9_-]/g, '_') || 'file';
+    cb(null, `${baseName}-${uniqueSuffix}${cleanExt}`);
   },
 });
 
-// File filter for PDF, JPEG/JPG, and DOCX
+// File filter for Images (JPEG, PNG, WEBP, GIF), PDF, and DOCX
 const fileFilter = (req, file, cb) => {
-  const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.docx'];
+  const allowedExtensions = [
+    '.pdf',
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.webp',
+    '.gif',
+    '.heic',
+    '.docx',
+    '.doc',
+    '.txt',
+  ];
   const ext = path.extname(file.originalname).toLowerCase();
 
-  const allowedMimeTypes = [
+  const isImageMime = file.mimetype && file.mimetype.startsWith('image/');
+  const isAllowedExt = allowedExtensions.includes(ext);
+  const isAllowedMime = [
     'application/pdf',
-    'image/jpeg',
-    'image/jpg',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/msword',
-    'application/octet-stream', // sometimes mobile clients send docx or pdf as octet-stream
-  ];
+    'text/plain',
+    'application/octet-stream', // mobile clients sometimes send files as octet-stream
+  ].includes(file.mimetype);
 
-  if (allowedExtensions.includes(ext) || allowedMimeTypes.includes(file.mimetype)) {
+  if (isImageMime || isAllowedExt || isAllowedMime) {
     cb(null, true);
   } else {
     cb(
-      new Error('Unsupported file format. Please upload PDF, JPEG/JPG, or DOCX documents.'),
+      new Error('Unsupported file format. Please upload an Image (PNG, JPG, WEBP), PDF, or DOCX document.'),
       false
     );
   }

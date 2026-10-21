@@ -11,11 +11,15 @@ import {
   RefreshControl,
   Alert,
   Platform,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import { theme } from '../theme';
 import GroupCard from '../components/GroupCard';
 import { groupsApi } from '../services/api';
+import showToast from '../services/toast';
+import { readAssetAsBase64, isUserCancellation } from '../utils/fileUtils';
 
 export default function GroupsScreen({ onSelectGroup }) {
   const [groups, setGroups] = useState([]);
@@ -29,6 +33,7 @@ export default function GroupsScreen({ onSelectGroup }) {
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupDesc, setNewGroupDesc] = useState('');
   const [newGroupCategory, setNewGroupCategory] = useState('General');
+  const [newGroupAvatar, setNewGroupAvatar] = useState('');
   const [creating, setCreating] = useState(false);
 
   const categories = ['All', 'Engineering', 'Marketing', 'Design', 'Legal', 'General'];
@@ -40,7 +45,9 @@ export default function GroupsScreen({ onSelectGroup }) {
         setGroups(res.groups);
       }
     } catch (err) {
-      console.warn('Failed to fetch groups:', err.message);
+      if (__DEV__) {
+        console.log('[GroupsScreen] Failed to fetch groups:', err?.message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -56,28 +63,61 @@ export default function GroupsScreen({ onSelectGroup }) {
     fetchGroups();
   };
 
+  const handlePickGroupPhoto = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'image/jpeg', 'image/png', 'image/webp', 'image/jpg'],
+        copyToCacheDirectory: true,
+      });
+
+      // Handle user cancellation silently
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const file = result.assets[0];
+      if (!file?.uri) {
+        showToast.error('Photo Selection', "Couldn't select photo. Please try again.");
+        return;
+      }
+
+      const { dataUri } = await readAssetAsBase64(file);
+      setNewGroupAvatar(dataUri);
+      showToast.success('Photo Selected', 'Group icon attached.');
+    } catch (err) {
+      if (__DEV__) {
+        console.log('[GroupsScreen] Group photo pick error:', err);
+      }
+      if (!isUserCancellation(err)) {
+        showToast.error('Photo Selection', "Couldn't select photo. Please try again.");
+      }
+    }
+  };
+
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) {
-      Alert.alert('Required Field', 'Please enter a group name.');
+      showToast.warning('Required Field', 'Please enter a group name.');
       return;
     }
 
     setCreating(true);
     try {
-      const res = await groupsApi.createGroup({
+      await groupsApi.createGroup({
         name: newGroupName.trim(),
         description: newGroupDesc.trim(),
         category: newGroupCategory,
+        avatar: newGroupAvatar,
       });
 
       setIsModalVisible(false);
       setNewGroupName('');
       setNewGroupDesc('');
       setNewGroupCategory('General');
+      setNewGroupAvatar('');
       fetchGroups();
-      Alert.alert('Success', 'Group created! You are the administrator of this group.');
+      showToast.success('Workspace Created', 'You are the administrator of this group.');
     } catch (err) {
-      Alert.alert('Error', err.message || 'Failed to create group.');
+      showToast.error('Create Group Failed', err);
     } finally {
       setCreating(false);
     }
@@ -215,6 +255,39 @@ export default function GroupsScreen({ onSelectGroup }) {
               >
                 <Ionicons name="close" size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
+            </View>
+
+            <Text style={styles.inputLabel}>Group Photo (Optional)</Text>
+            <View style={styles.groupAvatarPickerRow}>
+              <TouchableOpacity
+                style={styles.groupAvatarBox}
+                onPress={handlePickGroupPhoto}
+                activeOpacity={0.8}
+              >
+                {newGroupAvatar ? (
+                  <Image source={{ uri: newGroupAvatar }} style={styles.newGroupAvatarImg} />
+                ) : (
+                  <View style={styles.groupAvatarPlaceholder}>
+                    <Ionicons name="camera-outline" size={24} color={theme.colors.primary} />
+                    <Text style={styles.groupAvatarPlaceholderText}>Add Photo</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <View style={styles.groupAvatarInfo}>
+                {newGroupAvatar ? (
+                  <TouchableOpacity
+                    style={styles.removeGroupAvatarBtn}
+                    onPress={() => setNewGroupAvatar('')}
+                  >
+                    <Ionicons name="trash-outline" size={14} color={theme.colors.danger} />
+                    <Text style={styles.removeGroupAvatarText}>Remove Photo</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.groupAvatarHelpText}>
+                    Tap to add a photo or logo for your group (PNG, JPG)
+                  </Text>
+                )}
+              </View>
             </View>
 
             <Text style={styles.inputLabel}>Group Name *</Text>
@@ -495,5 +568,57 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 15,
     fontWeight: '700',
+  },
+  groupAvatarPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: theme.spacing.md,
+  },
+  groupAvatarBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    borderColor: '#C7D2FE',
+    borderStyle: 'dashed',
+    backgroundColor: '#F8FAFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  newGroupAvatarImg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  groupAvatarPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupAvatarPlaceholderText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: theme.colors.primary,
+    marginTop: 2,
+  },
+  groupAvatarInfo: {
+    flex: 1,
+  },
+  removeGroupAvatarBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+  },
+  removeGroupAvatarText: {
+    fontSize: 12,
+    color: theme.colors.danger,
+    fontWeight: '600',
+  },
+  groupAvatarHelpText: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    lineHeight: 16,
   },
 });

@@ -11,7 +11,7 @@ exports.createGroup = async (req, res) => {
   try {
     const userId = req.user.id;
     const userEmail = req.user.email;
-    const { name, description, category } = req.body;
+    const { name, description, category, avatar } = req.body;
 
     if (!name || name.trim() === '') {
       return res.status(400).json({
@@ -26,6 +26,7 @@ exports.createGroup = async (req, res) => {
       name: name.trim(),
       description: (description || '').trim(),
       category: category || 'General',
+      avatar: avatar || '',
       createdBy: userId,
       members: [
         {
@@ -53,6 +54,7 @@ exports.createGroup = async (req, res) => {
         name: group.name,
         description: group.description,
         category: group.category,
+        avatar: group.avatar || '',
         myRole: 'admin',
         memberCount: group.members.length,
         createdAt: group.createdAt,
@@ -84,6 +86,7 @@ exports.getUserGroups = async (req, res) => {
         name: g.name,
         description: g.description,
         category: g.category,
+        avatar: g.avatar || '',
         myRole: myMembership ? myMembership.role : 'member',
         memberCount: g.members.length,
         createdAt: g.createdAt,
@@ -136,6 +139,7 @@ exports.getGroupDetails = async (req, res) => {
         name: group.name,
         description: group.description,
         category: group.category,
+        avatar: group.avatar || '',
         myRole: myMembership.role,
         members: group.members.map((m) => {
           const userObj = m.user && typeof m.user === 'object' ? m.user : {};

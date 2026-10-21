@@ -37,7 +37,9 @@ export const AuthProvider = ({ children }) => {
           }
         }
       } catch (err) {
-        console.warn('Bootstrap auth load error:', err);
+        if (__DEV__) {
+          console.log('[AuthContext] Bootstrap auth load notice:', err?.message);
+        }
       } finally {
         setIsLoading(false);
       }

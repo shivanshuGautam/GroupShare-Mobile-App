@@ -1,9 +1,24 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  Image,
+  Modal,
+  Dimensions,
+  Platform,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../theme';
 
-export default function DocumentCard({ doc, onOpen, onDelete }) {
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+export default function DocumentCard({ doc, onOpen, onDelete, baseUrl = '' }) {
+  const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
   // Format file size
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -24,6 +39,33 @@ export default function DocumentCard({ doc, onOpen, onDelete }) {
     });
   };
 
+  // Check if file is an image
+  const isImageFile = (mimeType, originalName = '', fileName = '') => {
+    const ext = (originalName || fileName).split('.').pop().toLowerCase();
+    return (
+      mimeType?.startsWith('image/') ||
+      ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext)
+    );
+  };
+
+  const isImage = isImageFile(doc.mimeType, doc.originalName, doc.fileName);
+
+  // Determine full URL for the image
+  const getFullImageUrl = () => {
+    if (doc.fileUrl) {
+      if (doc.fileUrl.startsWith('http://') || doc.fileUrl.startsWith('https://')) {
+        return doc.fileUrl;
+      }
+      return `${baseUrl}${doc.fileUrl}`;
+    }
+    if (doc.fileName) {
+      return `${baseUrl}/uploads/${doc.fileName}`;
+    }
+    return '';
+  };
+
+  const imageUrl = getFullImageUrl();
+
   // Get file type styling and label
   const getFileMeta = (mimeType, originalName = '') => {
     const ext = originalName.split('.').pop().toLowerCase();
@@ -38,8 +80,9 @@ export default function DocumentCard({ doc, onOpen, onDelete }) {
     ) {
       return { label: 'DOCX', color: '#2563EB', icon: 'document', bgColor: '#EFF6FF' };
     }
-    if (mimeType?.includes('image') || ['jpg', 'jpeg', 'png'].includes(ext)) {
-      return { label: 'JPG', color: '#059669', icon: 'image', bgColor: '#ECFDF5' };
+    if (mimeType?.includes('image') || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
+      const imgLabel = ext ? ext.toUpperCase() : 'PHOTO';
+      return { label: imgLabel, color: '#059669', icon: 'image', bgColor: '#ECFDF5' };
     }
     return { label: 'FILE', color: '#4F46E5', icon: 'document-attach', bgColor: '#EEF2FF' };
   };
@@ -80,6 +123,26 @@ export default function DocumentCard({ doc, onOpen, onDelete }) {
           </TouchableOpacity>
         ) : null}
       </View>
+
+      {/* Actual Image Preview Thumbnail if document is an image */}
+      {isImage && imageUrl && !imageError ? (
+        <TouchableOpacity
+          style={styles.imagePreviewContainer}
+          onPress={() => setImageModalVisible(true)}
+          activeOpacity={0.85}
+        >
+          <Image
+            source={{ uri: imageUrl }}
+            style={styles.imagePreview}
+            resizeMode="cover"
+            onError={() => setImageError(true)}
+          />
+          <View style={styles.imageOverlayBadge}>
+            <Ionicons name="expand-outline" size={14} color="#FFF" />
+            <Text style={styles.imageOverlayBadgeText}>View Photo</Text>
+          </View>
+        </TouchableOpacity>
+      ) : null}
 
       {doc.description ? (
         <Text style={styles.description} numberOfLines={2}>
@@ -126,9 +189,59 @@ export default function DocumentCard({ doc, onOpen, onDelete }) {
         onPress={() => onOpen(doc)}
         activeOpacity={0.8}
       >
-        <Ionicons name="download-outline" size={16} color={theme.colors.primary} />
-        <Text style={styles.openButtonText}>View & Share File</Text>
+        <Ionicons name={isImage ? "eye-outline" : "download-outline"} size={16} color={theme.colors.primary} />
+        <Text style={styles.openButtonText}>
+          {isImage ? 'View & Share Photo' : 'View & Share File'}
+        </Text>
       </TouchableOpacity>
+
+      {/* Full-Screen Image Viewer Modal */}
+      {isImage && imageUrl ? (
+        <Modal
+          visible={imageModalVisible}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setImageModalVisible(false)}
+        >
+          <View style={styles.fullImageModal}>
+            <View style={styles.fullImageHeader}>
+              <Text style={styles.fullImageTitle} numberOfLines={1}>
+                {doc.title}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setImageModalVisible(false)}
+                style={styles.closeFullImageBtn}
+              >
+                <Ionicons name="close" size={24} color="#FFF" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.fullImageBody}>
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.fullImageView}
+                resizeMode="contain"
+              />
+            </View>
+
+            <View style={styles.fullImageFooter}>
+              <Text style={styles.fullImageSub}>
+                {doc.originalName} • {formatBytes(doc.size)}
+              </Text>
+              <TouchableOpacity
+                style={styles.fullImageShareBtn}
+                onPress={() => {
+                  setImageModalVisible(false);
+                  onOpen(doc);
+                }}
+              >
+                <Ionicons name="share-outline" size={16} color="#FFF" />
+                <Text style={styles.fullImageShareBtnText}>Share Photo</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
     </View>
   );
 }
@@ -242,5 +355,94 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: theme.colors.primary,
+  },
+  imagePreviewContainer: {
+    marginTop: theme.spacing.sm,
+    borderRadius: theme.borderRadius.sm,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#0F172A',
+  },
+  imagePreview: {
+    width: '100%',
+    height: 160,
+    backgroundColor: '#1E293B',
+  },
+  imageOverlayBadge: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  imageOverlayBadgeText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  fullImageModal: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'space-between',
+  },
+  fullImageHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingHorizontal: theme.spacing.md,
+    paddingBottom: 12,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+  },
+  fullImageTitle: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+    marginRight: 12,
+  },
+  closeFullImageBtn: {
+    padding: 6,
+  },
+  fullImageBody: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImageView: {
+    width: SCREEN_WIDTH,
+    height: '100%',
+  },
+  fullImageFooter: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 16,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  fullImageSub: {
+    color: '#94A3B8',
+    fontSize: 12,
+    flex: 1,
+  },
+  fullImageShareBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    gap: 6,
+  },
+  fullImageShareBtnText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

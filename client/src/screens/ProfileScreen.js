@@ -13,11 +13,12 @@ import {
   Image,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import { getBaseUrl, setBaseUrl } from '../services/api';
+import showToast from '../services/toast';
+import { readAssetAsBase64, isUserCancellation } from '../utils/fileUtils';
 
 export default function ProfileScreen() {
   const { user, updateProfile, logout } = useAuth();
@@ -54,7 +55,7 @@ export default function ProfileScreen() {
 
   const handleSaveProfile = async () => {
     if (!name.trim()) {
-      Alert.alert('Required', 'Name cannot be empty.');
+      showToast.warning('Required Field', 'Name cannot be empty.');
       return;
     }
 
@@ -68,9 +69,9 @@ export default function ProfileScreen() {
         bio: bio.trim(),
       });
       setIsEditing(false);
-      Alert.alert('Success', 'Profile updated successfully!');
+      showToast.success('Profile Updated', 'Profile updated successfully!');
     } catch (err) {
-      Alert.alert('Update Failed', err.message || 'Could not update profile.');
+      showToast.error('Update Failed', err);
     } finally {
       setSaving(false);
     }
@@ -79,27 +80,38 @@ export default function ProfileScreen() {
   const handlePickPhoto = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/jpeg', 'image/png', 'image/jpg', 'image/*'],
+        type: ['image/jpeg', 'image/png', 'image/jpg', 'image/webp', 'image/*'],
         copyToCacheDirectory: true,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const file = result.assets[0];
-        setUploadingPhoto(true);
-
-        const base64 = await FileSystem.readAsStringAsync(file.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        const mime = file.mimeType || 'image/jpeg';
-        const photoDataUri = `data:${mime};base64,${base64}`;
-
-        await updateProfile({ avatar: photoDataUri });
-        Alert.alert('Success', 'Profile photo updated successfully!');
+      // Handle user cancellation silently (Requirement 8)
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
       }
+
+      const file = result.assets[0];
+      if (!file?.uri) {
+        showToast.error('Photo Selection', "Couldn't select photo. Please try again.");
+        return;
+      }
+
+      setUploadingPhoto(true);
+
+      // Robust cross-platform base64 file reading (handles Android content://, SAF, and iOS file://)
+      const { dataUri } = await readAssetAsBase64(file);
+
+      await updateProfile({ avatar: dataUri });
+      showToast.success('Photo Updated', 'Profile photo updated successfully!');
     } catch (err) {
-      console.warn('Photo pick error:', err);
-      Alert.alert('Error', 'Could not upload photo: ' + (err.message || ''));
+      // Diagnostic in dev console without triggering LogBox overlay
+      if (__DEV__) {
+        console.log('[ProfileScreen] Photo pick/upload error:', err);
+      }
+
+      // If user intentional cancellation, do not show error popup
+      if (!isUserCancellation(err)) {
+        showToast.error('Photo Selection', "Couldn't select photo. Please try again.");
+      }
     } finally {
       setUploadingPhoto(false);
     }
@@ -118,9 +130,9 @@ export default function ProfileScreen() {
             try {
               setUploadingPhoto(true);
               await updateProfile({ avatar: '' });
-              Alert.alert('Success', 'Profile photo removed.');
+              showToast.success('Photo Removed', 'Profile photo removed.');
             } catch (err) {
-              Alert.alert('Error', 'Could not remove photo: ' + (err.message || ''));
+              showToast.error('Error', 'Could not remove photo. Please try again.');
             } finally {
               setUploadingPhoto(false);
             }
@@ -132,10 +144,14 @@ export default function ProfileScreen() {
 
   const handleSaveServerUrl = async () => {
     if (!serverUrl.trim()) return;
-    const clean = await setBaseUrl(serverUrl.trim());
-    setServerUrlState(clean);
-    setIsEditingServer(false);
-    Alert.alert('Server URL Updated', `API endpoint set to: ${clean}`);
+    try {
+      const clean = await setBaseUrl(serverUrl.trim());
+      setServerUrlState(clean);
+      setIsEditingServer(false);
+      showToast.success('Server URL Updated', `API endpoint set to: ${clean}`);
+    } catch (err) {
+      showToast.error('URL Error', err);
+    }
   };
 
   const handleLogout = () => {

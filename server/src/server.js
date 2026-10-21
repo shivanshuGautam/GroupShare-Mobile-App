@@ -37,6 +37,9 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Serve uploaded files statically so images & previews load smoothly
+app.use('/uploads', express.static(uploadsDir));
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({

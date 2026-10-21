@@ -57,6 +57,7 @@ const groups = {
       name: data.name,
       description: data.description || '',
       category: data.category || 'General',
+      avatar: data.avatar || '',
       createdBy: data.createdBy,
       members: data.members || [],
       invites: data.invites || [],
@@ -105,7 +106,7 @@ const documents = {
       updatedAt: new Date(),
     };
     memoryStore.documents.push(doc);
-    return doc;
+    return doc; A
   },
   findByGroup: async (groupId) => {
     return memoryStore.documents.filter((d) => d.group.toString() === groupId.toString());

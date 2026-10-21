@@ -12,12 +12,15 @@ import {
   Alert,
   ScrollView,
   Platform,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { theme } from '../theme';
 import DocumentCard from '../components/DocumentCard';
-import { groupsApi, documentsApi } from '../services/api';
+import { groupsApi, documentsApi, getBaseUrl, DEFAULT_SERVER_URL } from '../services/api';
+import showToast from '../services/toast';
+import { isUserCancellation } from '../utils/fileUtils';
 
 export default function GroupDetailsScreen({ group, onBack }) {
   const [activeTab, setActiveTab] = useState('documents'); // 'documents' | 'members'
@@ -25,6 +28,7 @@ export default function GroupDetailsScreen({ group, onBack }) {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [baseUrl, setBaseUrlState] = useState(DEFAULT_SERVER_URL);
 
   // Upload Modal State
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -56,7 +60,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
         setDocuments(docsRes.documents);
       }
     } catch (err) {
-      console.warn('Error loading group details:', err.message);
+      if (__DEV__) {
+        console.log('[GroupDetailsScreen] Error loading group details:', err?.message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -65,6 +71,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
 
   useEffect(() => {
     loadData();
+    getBaseUrl().then((url) => {
+      if (url) setBaseUrlState(url);
+    });
   }, [loadData]);
 
   const onRefresh = () => {
@@ -72,42 +81,59 @@ export default function GroupDetailsScreen({ group, onBack }) {
     loadData();
   };
 
-  // Pick Document (PDF, JPEG/JPG, DOCX)
+  // Pick Document (PDF, Images, DOCX)
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: [
-          'application/pdf',
+          'image/*',
           'image/jpeg',
+          'image/png',
+          'image/webp',
+          'image/gif',
           'image/jpg',
+          'application/pdf',
           'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           'application/msword',
+          'text/plain',
+          '*/*',
         ],
         copyToCacheDirectory: true,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const file = result.assets[0];
-        setSelectedFile(file);
-        if (!docTitle) {
-          // Default title from file name without extension
-          const cleanName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
-          setDocTitle(cleanName);
-        }
+      // User cancellation handled silently
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
       }
+
+      const file = result.assets[0];
+      setSelectedFile(file);
+      if (!docTitle) {
+        const rawName = file.name || 'document';
+        const cleanName = rawName.includes('.')
+          ? rawName.substring(0, rawName.lastIndexOf('.'))
+          : rawName;
+        setDocTitle(cleanName);
+      }
+      showToast.info('File Selected', file.name || 'Document ready for upload');
     } catch (err) {
-      Alert.alert('File Picker Error', err.message);
+      if (__DEV__) {
+        console.log('[GroupDetailsScreen] File pick error:', err);
+      }
+      if (!isUserCancellation(err)) {
+        showToast.error('File Selection', "Couldn't select file. Please try again.");
+      }
     }
   };
 
   // Submit Upload
   const handleUploadSubmit = async () => {
     if (!selectedFile) {
-      Alert.alert('Missing File', 'Please pick a PDF, JPEG/JPG, or DOCX document.');
+      showToast.warning('Missing File', 'Please pick a PDF, JPEG/JPG, or document to upload.');
       return;
     }
     if (!docTitle.trim()) {
-      Alert.alert('Missing Title', 'Please enter a title for this document.');
+      showToast.warning('Missing Title', 'Please enter a title for this document.');
       return;
     }
 
@@ -127,9 +153,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
       setDocDesc('');
       setDocPermission('all');
       loadData();
-      Alert.alert('Success', 'Document uploaded! Group members have been notified.');
+      showToast.success('Upload Complete', 'Document uploaded! Group members have been notified.');
     } catch (err) {
-      Alert.alert('Upload Failed', err.message || 'Unable to upload file.');
+      showToast.error('Upload Failed', err);
     } finally {
       setUploading(false);
     }
@@ -140,9 +166,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
     try {
       await documentsApi.deleteDocument(docId);
       loadData();
-      Alert.alert('Deleted', 'Document was deleted successfully.');
+      showToast.success('Deleted', 'Document was deleted successfully.');
     } catch (err) {
-      Alert.alert('Delete Failed', err.message || 'Could not delete document.');
+      showToast.error('Delete Failed', err);
     }
   };
 
@@ -151,14 +177,14 @@ export default function GroupDetailsScreen({ group, onBack }) {
     try {
       await documentsApi.viewOrShareDocument(doc);
     } catch (err) {
-      Alert.alert('View Error', 'Unable to open or share this document: ' + err.message);
+      showToast.error('Document Viewer', 'Unable to open or share this document.');
     }
   };
 
   // Send Email Invite (Admin only)
   const handleInviteSubmit = async () => {
     if (!inviteEmail.trim()) {
-      Alert.alert('Missing Email', 'Please enter the email address to invite.');
+      showToast.warning('Missing Email', 'Please enter the email address to invite.');
       return;
     }
 
@@ -168,9 +194,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
       setIsInviteModalOpen(false);
       setInviteEmail('');
       loadData();
-      Alert.alert('Invitation Sent', res.message || 'Member invitation processed successfully.');
+      showToast.success('Invitation Sent', res.message || 'Member invitation processed successfully.');
     } catch (err) {
-      Alert.alert('Invite Error', err.message || 'Failed to send invite.');
+      showToast.error('Invite Error', err);
     } finally {
       setInviting(false);
     }
@@ -190,9 +216,14 @@ export default function GroupDetailsScreen({ group, onBack }) {
         </View>
 
         <View style={styles.bannerTitleRow}>
-          <Text style={styles.groupTitle} numberOfLines={2}>
-            {groupDetails.name}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+            {groupDetails.avatar ? (
+              <Image source={{ uri: groupDetails.avatar }} style={styles.groupBannerAvatar} />
+            ) : null}
+            <Text style={styles.groupTitle} numberOfLines={2}>
+              {groupDetails.name}
+            </Text>
+          </View>
           <View
             style={[
               styles.roleChip,
@@ -291,6 +322,7 @@ export default function GroupDetailsScreen({ group, onBack }) {
                 doc={item}
                 onOpen={handleOpenDocument}
                 onDelete={handleDeleteDocument}
+                baseUrl={baseUrl}
               />
             )}
             contentContainerStyle={styles.listContent}
@@ -411,24 +443,54 @@ export default function GroupDetailsScreen({ group, onBack }) {
                 onPress={handlePickDocument}
                 activeOpacity={0.8}
               >
-                <Ionicons
-                  name={selectedFile ? 'document-attach' : 'cloud-upload-outline'}
-                  size={32}
-                  color={selectedFile ? theme.colors.success : theme.colors.primary}
-                />
                 {selectedFile ? (
-                  <View style={{ alignItems: 'center', marginTop: 6 }}>
-                    <Text style={styles.pickedFileName} numberOfLines={1}>
-                      {selectedFile.name}
-                    </Text>
-                    <Text style={styles.pickedFileSize}>
-                      {Math.round(selectedFile.size / 1024)} KB • Tap to change file
-                    </Text>
-                  </View>
+                  (selectedFile.mimeType?.startsWith('image/') ||
+                  /\.(jpg|jpeg|png|webp|gif)$/i.test(selectedFile.name || '')) ? (
+                    <View style={styles.pickedImageWrapper}>
+                      <Image
+                        source={{ uri: selectedFile.uri }}
+                        style={styles.pickedImageThumb}
+                        resizeMode="cover"
+                      />
+                      <View style={styles.pickedImageMeta}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.pickedFileName} numberOfLines={1}>
+                            {selectedFile.name}
+                          </Text>
+                          <Text style={styles.pickedFileSize}>
+                            {selectedFile.size ? `${Math.round(selectedFile.size / 1024)} KB` : 'Photo ready'} • Tap to change photo
+                          </Text>
+                        </View>
+                        <View style={styles.photoReadyBadge}>
+                          <Ionicons name="checkmark-circle" size={15} color="#059669" />
+                          <Text style={styles.photoReadyBadgeText}>Photo Ready</Text>
+                        </View>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={{ alignItems: 'center', width: '100%' }}>
+                      <Ionicons
+                        name="document-attach"
+                        size={32}
+                        color={theme.colors.success}
+                      />
+                      <Text style={styles.pickedFileName} numberOfLines={1}>
+                        {selectedFile.name}
+                      </Text>
+                      <Text style={styles.pickedFileSize}>
+                        {selectedFile.size ? `${Math.round(selectedFile.size / 1024)} KB` : 'File ready'} • Tap to change file
+                      </Text>
+                    </View>
+                  )
                 ) : (
-                  <View style={{ alignItems: 'center', marginTop: 6 }}>
-                    <Text style={styles.pickFileText}>Tap to select document</Text>
-                    <Text style={styles.pickFileSub}>PDF, JPEG/JPG, or DOCX up to 25MB</Text>
+                  <View style={{ alignItems: 'center' }}>
+                    <Ionicons
+                      name="cloud-upload-outline"
+                      size={36}
+                      color={theme.colors.primary}
+                    />
+                    <Text style={styles.pickFileText}>Tap to select photo or document</Text>
+                    <Text style={styles.pickFileSub}>Photos (PNG, JPG, WEBP), PDF, DOCX up to 25MB</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -908,6 +970,46 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: theme.colors.textMuted,
     marginTop: 2,
+  },
+  groupBannerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  pickedImageWrapper: {
+    width: '100%',
+    borderRadius: theme.borderRadius.sm,
+    overflow: 'hidden',
+  },
+  pickedImageThumb: {
+    width: '100%',
+    height: 140,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: '#0F172A',
+  },
+  pickedImageMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  photoReadyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  photoReadyBadgeText: {
+    color: '#059669',
+    fontSize: 11,
+    fontWeight: '700',
   },
   pickedFileName: {
     fontSize: 14,
