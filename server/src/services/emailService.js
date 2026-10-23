@@ -5,30 +5,14 @@ const createTransporter = () => {
   const pass = (process.env.EMAIL_PASS || process.env.GMAIL_PASSWORD || '').trim().replace(/\s+/g, '');
 
   if (user && pass) {
-    const isGmail = user.toLowerCase().includes('gmail') || !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('gmail');
-
-    if (isGmail) {
-      return nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true, // SSL
-        auth: {
-          user,
-          pass,
-        },
-        tls: {
-          rejectUnauthorized: false,
-        },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 10000,
-      });
-    }
+    const host = (process.env.EMAIL_HOST || (user.toLowerCase().includes('smtp-brevo') ? 'smtp-relay.brevo.com' : 'smtp.gmail.com')).trim();
+    const port = process.env.EMAIL_PORT ? parseInt(process.env.EMAIL_PORT, 10) : (host.includes('gmail') ? 465 : 587);
+    const secure = port === 465;
 
     return nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: process.env.EMAIL_PORT ? parseInt(process.env.EMAIL_PORT, 10) : 587,
-      secure: process.env.EMAIL_PORT === '465',
+      host,
+      port,
+      secure,
       auth: {
         user,
         pass,
@@ -36,9 +20,9 @@ const createTransporter = () => {
       tls: {
         rejectUnauthorized: false,
       },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 15000,
     });
   }
   return null;
@@ -47,6 +31,7 @@ const createTransporter = () => {
 // Verify transporter at startup
 const testEmailConnection = async () => {
   const user = (process.env.EMAIL_USER || process.env.GMAIL_USERNAME || '').trim();
+  const host = (process.env.EMAIL_HOST || 'smtp').trim();
   const transporter = createTransporter();
 
   if (!transporter) {
@@ -56,10 +41,9 @@ const testEmailConnection = async () => {
 
   try {
     await transporter.verify();
-    console.log(`[EmailService] Gmail SMTP connected successfully as: ${user}`);
+    console.log(` [EmailService] SMTP connected successfully via ${host} as: ${user}`);
   } catch (error) {
-    console.warn(` [EmailService] Gmail SMTP Notice: ${error.message}`);
-    console.warn('    If Gmail blocked sign-in, ensure 2-Step Verification is ON and a Google App Password is used.');
+    console.warn(` [EmailService] SMTP Notice: ${error.message}`);
     console.warn('    Codes will always be displayed in the server terminal and returned to the app.');
   }
 };
