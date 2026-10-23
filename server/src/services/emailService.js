@@ -210,15 +210,16 @@ const sendGroupInviteEmail = async ({
         </div>
       `;
 
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: fromAddress,
       to: toEmail,
       subject,
       html: htmlContent,
     });
+    console.log(`[EmailService] Invitation email successfully sent to ${toEmail} (MessageId: ${info.messageId})`);
     return { success: true, mode: 'sent-smtp' };
   } catch (error) {
-    console.error('[EmailService] SMTP error, logged to console:', error.message);
+    console.error(`[EmailService] SMTP error sending to ${toEmail}:`, error.message);
     return { success: true, mode: 'console-logged' };
   }
 };
