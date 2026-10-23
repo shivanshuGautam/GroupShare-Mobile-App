@@ -28,23 +28,74 @@ const createTransporter = () => {
   return null;
 };
 
-// Verify transporter at startup
+// Send via Brevo REST API (HTTPS port 443 - 100% compliant with Render.com free tier firewall)
+const sendViaBrevoApi = async ({ toEmail, subject, htmlContent }) => {
+  const apiKey = (process.env.BREVO_API_KEY || process.env.EMAIL_PASS || '').trim();
+  if (!apiKey) return false;
+
+  const senderEmail = (process.env.BREVO_SENDER_EMAIL || 'harigautam772@gmail.com').trim();
+  const senderName = 'GroupShare App';
+
+  try {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': apiKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: senderName, email: senderEmail },
+        to: [{ email: toEmail }],
+        subject,
+        htmlContent,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.messageId) {
+      console.log(`[EmailService] Brevo HTTP API successfully delivered email to ${toEmail} (MessageId: ${data.messageId})`);
+      return { success: true, messageId: data.messageId };
+    } else {
+      console.warn('[EmailService] Brevo HTTP API notice:', data.message || response.statusText);
+      return false;
+    }
+  } catch (err) {
+    console.warn('[EmailService] Brevo HTTP API fetch notice:', err.message);
+    return false;
+  }
+};
+
+// Verify transporter / API at startup
 const testEmailConnection = async () => {
+  const apiKey = (process.env.BREVO_API_KEY || process.env.EMAIL_PASS || '').trim();
+  if (apiKey) {
+    try {
+      const res = await fetch('https://api.brevo.com/v3/account', {
+        headers: { 'accept': 'application/json', 'api-key': apiKey }
+      });
+      if (res.ok) {
+        console.log('✅ [EmailService] Brevo HTTP API connected successfully! (Render port-443 compliant)');
+        return;
+      }
+    } catch (_) {}
+  }
+
   const user = (process.env.EMAIL_USER || process.env.GMAIL_USERNAME || '').trim();
   const host = (process.env.EMAIL_HOST || 'smtp').trim();
   const transporter = createTransporter();
 
   if (!transporter) {
-    console.log(' [EmailService] SMTP not fully configured (missing EMAIL_USER or EMAIL_PASS). Codes will be logged to server console.');
+    console.log('ℹ️ [EmailService] SMTP not fully configured. Codes will be logged to server console.');
     return;
   }
 
   try {
     await transporter.verify();
-    console.log(` [EmailService] SMTP connected successfully via ${host} as: ${user}`);
+    console.log(`✅ [EmailService] SMTP connected successfully via ${host} as: ${user}`);
   } catch (error) {
-    console.warn(` [EmailService] SMTP Notice: ${error.message}`);
-    console.warn('    Codes will always be displayed in the server terminal and returned to the app.');
+    console.warn(`⚠️ [EmailService] SMTP Notice: ${error.message}`);
+    console.warn('    Render.com free tier blocks SMTP ports 587/465. Brevo HTTP API will be used instead.');
   }
 };
 
@@ -62,6 +113,28 @@ const sendVerificationEmail = async (email, code, userName) => {
   console.log(' Expires in 15 minutes');
   console.log('=============================================================\n');
 
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+      <h2 style="color: #4F46E5;">Welcome to GroupShare!</h2>
+      <p>Hi ${userName || 'there'},</p>
+      <p>Please enter the following 6-digit verification code in your mobile app to activate your account:</p>
+      <div style="background: #EEF2FF; padding: 15px; border-radius: 8px; font-size: 28px; font-weight: bold; letter-spacing: 5px; color: #4F46E5; text-align: center; margin: 20px 0;">
+        ${code}
+      </div>
+      <p style="color: #666; font-size: 13px;">This code will expire in 15 minutes. If you did not request this, you can ignore this email.</p>
+    </div>
+  `;
+
+  // Strategy 1: Brevo HTTP API (Port 443 - Bypasses Render SMTP port blocking)
+  const brevoApiResult = await sendViaBrevoApi({
+    toEmail: email,
+    subject: 'Your GroupShare Email Verification Code',
+    htmlContent,
+  });
+  if (brevoApiResult && brevoApiResult.success) {
+    return { success: true, mode: 'sent-brevo-api', code };
+  }
+
   const transporter = createTransporter();
   if (!transporter) {
     return { success: true, mode: 'console-logged', code };
@@ -74,17 +147,7 @@ const sendVerificationEmail = async (email, code, userName) => {
       from: fromAddress,
       to: email,
       subject: 'Your GroupShare Email Verification Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-          <h2 style="color: #4F46E5;">Welcome to GroupShare!</h2>
-          <p>Hi ${userName || 'there'},</p>
-          <p>Please enter the following 6-digit verification code in your mobile app to activate your account:</p>
-          <div style="background: #EEF2FF; padding: 15px; border-radius: 8px; font-size: 28px; font-weight: bold; letter-spacing: 5px; color: #4F46E5; text-align: center; margin: 20px 0;">
-            ${code}
-          </div>
-          <p style="color: #666; font-size: 13px;">This code will expire in 15 minutes. If you did not request this, you can ignore this email.</p>
-        </div>
-      `,
+      html: htmlContent,
     });
     console.log(`[EmailService] Verification email successfully sent to ${email} (MessageId: ${info.messageId})`);
     return { success: true, mode: 'sent-smtp', code };
@@ -118,23 +181,12 @@ const sendGroupInviteEmail = async ({
   if (inviteLink) console.log(` Invite Link: ${inviteLink}`);
   console.log('=============================================\n');
 
-  const transporter = createTransporter();
-  if (!transporter) {
-    return { success: true, mode: 'console-logged', inviteToken, inviteLink: webLink };
-  }
+  const subject = isExistingUser
+    ? `You have been added to "${groupName}" on GroupShare`
+    : `Invitation: Join "${groupName}" on GroupShare`;
 
-  try {
-    const senderUser = process.env.EMAIL_USER || process.env.GMAIL_USERNAME;
-    const fromAddress =
-      process.env.EMAIL_FROM ||
-      (senderUser ? `"GroupShare App" <${senderUser.trim()}>` : '"GroupShare App" <no-reply@groupshare.local>');
-
-    const subject = isExistingUser
-      ? `You have been added to "${groupName}" on GroupShare`
-      : `Invitation: Join "${groupName}" on GroupShare`;
-
-    const htmlContent = isExistingUser
-      ? `
+  const htmlContent = isExistingUser
+    ? `
         <div style="font-family: Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 25px; color: #1E293B; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px;">
           <div style="text-align: center; margin-bottom: 20px;">
             <div style="display: inline-block; background: #4F46E5; color: #FFF; font-weight: bold; font-size: 20px; padding: 12px 24px; border-radius: 8px;">
@@ -160,7 +212,7 @@ const sendGroupInviteEmail = async ({
           </p>
         </div>
       `
-      : `
+    : `
         <div style="font-family: Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 25px; color: #1E293B; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px;">
           <div style="text-align: center; margin-bottom: 20px;">
             <div style="display: inline-block; background: #4F46E5; color: #FFF; font-weight: bold; font-size: 20px; padding: 12px 24px; border-radius: 8px;">
@@ -209,6 +261,27 @@ const sendGroupInviteEmail = async ({
           </p>
         </div>
       `;
+
+  // Strategy 1: Brevo HTTP API (Port 443 - Bypasses Render SMTP port blocking)
+  const brevoApiResult = await sendViaBrevoApi({
+    toEmail,
+    subject,
+    htmlContent,
+  });
+  if (brevoApiResult && brevoApiResult.success) {
+    return { success: true, mode: 'sent-brevo-api' };
+  }
+
+  const transporter = createTransporter();
+  if (!transporter) {
+    return { success: true, mode: 'console-logged', inviteToken, inviteLink: webLink };
+  }
+
+  try {
+    const senderUser = process.env.EMAIL_USER || process.env.GMAIL_USERNAME;
+    const fromAddress =
+      process.env.EMAIL_FROM ||
+      (senderUser ? `"GroupShare App" <${senderUser.trim()}>` : '"GroupShare App" <no-reply@groupshare.local>');
 
     const info = await transporter.sendMail({
       from: fromAddress,
