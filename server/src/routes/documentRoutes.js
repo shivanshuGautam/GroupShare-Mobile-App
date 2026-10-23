@@ -40,6 +40,8 @@ const handleUpload = (req, res, next) => {
 router.post('/upload', handleUpload, documentController.uploadDocument);
 router.get('/group/:groupId', documentController.getGroupDocuments);
 router.get('/download/:id', documentController.downloadDocument);
+router.delete('/:id/me', documentController.deleteForMe);
+router.delete('/:id/everyone', documentController.deleteForEveryone);
 router.delete('/:id', documentController.deleteDocument);
 
 module.exports = router;

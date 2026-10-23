@@ -15,7 +15,15 @@ import { theme } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-export default function DocumentCard({ doc, onOpen, onDelete, baseUrl = '' }) {
+export default function DocumentCard({
+  doc,
+  onOpen,
+  onDelete,
+  onDeleteForMe,
+  onDeleteForEveryone,
+  baseUrl = '',
+}) {
+  const [menuVisible, setMenuVisible] = useState(false);
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [imageError, setImageError] = useState(false);
 
@@ -89,19 +97,48 @@ export default function DocumentCard({ doc, onOpen, onDelete, baseUrl = '' }) {
 
   const fileMeta = getFileMeta(doc.mimeType, doc.originalName);
 
-  const confirmDelete = () => {
+  const canDeleteForEveryone =
+    doc.canDeleteForEveryone !== undefined ? doc.canDeleteForEveryone : doc.canDelete;
+
+  // Handle Delete for Me
+  const handleDeleteForMeAction = () => {
+    setMenuVisible(false);
+    if (typeof onDeleteForMe === 'function') {
+      onDeleteForMe(doc.id);
+    }
+  };
+
+  // Handle Delete for Everyone with confirmation dialog
+  const handleDeleteForEveryoneAction = () => {
+    setMenuVisible(false);
     Alert.alert(
-      'Delete Document',
-      `Are you sure you want to delete "${doc.title}"?`,
+      'Delete for Everyone?',
+      `Are you sure you want to permanently delete "${doc.title}" for all members of this group?\n\nThis cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => onDelete(doc.id) },
-      ]
+        {
+          text: 'Delete for Everyone',
+          style: 'destructive',
+          onPress: () => {
+            if (typeof onDeleteForEveryone === 'function') {
+              onDeleteForEveryone(doc.id);
+            } else if (typeof onDelete === 'function') {
+              onDelete(doc.id);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
     );
   };
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.96}
+      onLongPress={() => setMenuVisible(true)}
+      delayLongPress={350}
+    >
       <View style={styles.headerRow}>
         <View style={[styles.fileIconBox, { backgroundColor: fileMeta.bgColor }]}>
           <Ionicons name={fileMeta.icon} size={22} color={fileMeta.color} />
@@ -117,11 +154,14 @@ export default function DocumentCard({ doc, onOpen, onDelete, baseUrl = '' }) {
           </Text>
         </View>
 
-        {doc.canDelete ? (
-          <TouchableOpacity onPress={confirmDelete} style={styles.deleteButton}>
-            <Ionicons name="trash-outline" size={18} color={theme.colors.danger} />
-          </TouchableOpacity>
-        ) : null}
+        {/* Three-dot context menu button */}
+        <TouchableOpacity
+          onPress={() => setMenuVisible(true)}
+          style={styles.moreButton}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="ellipsis-vertical" size={18} color={theme.colors.textMuted} />
+        </TouchableOpacity>
       </View>
 
       {/* Actual Image Preview Thumbnail if document is an image */}
@@ -195,6 +235,88 @@ export default function DocumentCard({ doc, onOpen, onDelete, baseUrl = '' }) {
         </Text>
       </TouchableOpacity>
 
+      {/* WhatsApp-Style Deletion Context Menu Modal */}
+      <Modal
+        visible={menuVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuModalOverlay}
+          activeOpacity={1}
+          onPress={() => setMenuVisible(false)}
+        >
+          <View style={styles.menuSheet}>
+            <View style={styles.menuHandle} />
+
+            {/* Document Header in Menu */}
+            <View style={styles.menuHeader}>
+              <View style={[styles.menuFileIcon, { backgroundColor: fileMeta.bgColor }]}>
+                <Ionicons name={fileMeta.icon} size={20} color={fileMeta.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.menuTitle} numberOfLines={1}>
+                  {doc.title}
+                </Text>
+                <Text style={styles.menuSubtitle} numberOfLines={1}>
+                  {doc.originalName} • {formatBytes(doc.size)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.menuDivider} />
+
+            {/* Option A: Delete for Me */}
+            <TouchableOpacity
+              style={styles.menuOption}
+              onPress={handleDeleteForMeAction}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.menuOptionIconBox, { backgroundColor: '#F1F5F9' }]}>
+                <Ionicons name="eye-off-outline" size={20} color={theme.colors.textPrimary} />
+              </View>
+              <View style={styles.menuOptionContent}>
+                <Text style={styles.menuOptionTitle}>Delete for Me</Text>
+                <Text style={styles.menuOptionDesc}>
+                  Removes this file from your view only. Other group members can still access it.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Option B: Delete for Everyone (Admin or Uploader) */}
+            {canDeleteForEveryone ? (
+              <TouchableOpacity
+                style={styles.menuOption}
+                onPress={handleDeleteForEveryoneAction}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuOptionIconBox, { backgroundColor: '#FEE2E2' }]}>
+                  <Ionicons name="trash-outline" size={20} color="#DC2626" />
+                </View>
+                <View style={styles.menuOptionContent}>
+                  <Text style={[styles.menuOptionTitle, { color: '#DC2626' }]}>
+                    Delete for Everyone
+                  </Text>
+                  <Text style={styles.menuOptionDesc}>
+                    Permanently deletes this file from the group for all members.
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
+
+            {/* Cancel Button */}
+            <TouchableOpacity
+              style={styles.menuCancelBtn}
+              onPress={() => setMenuVisible(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.menuCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Full-Screen Image Viewer Modal */}
       {isImage && imageUrl ? (
         <Modal
@@ -242,7 +364,7 @@ export default function DocumentCard({ doc, onOpen, onDelete, baseUrl = '' }) {
           </View>
         </Modal>
       ) : null}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -290,9 +412,11 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     marginTop: 2,
   },
-  deleteButton: {
-    padding: 6,
-    borderRadius: 6,
+  moreButton: {
+    padding: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   description: {
     fontSize: 13,
@@ -384,6 +508,101 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 11,
     fontWeight: '600',
+  },
+  // WhatsApp-Style Deletion Modal Styles
+  menuModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  menuSheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  menuHandle: {
+    width: 38,
+    height: 4,
+    backgroundColor: theme.colors.border,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  menuHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingBottom: 14,
+  },
+  menuFileIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+  },
+  menuSubtitle: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginTop: 2,
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: theme.colors.border,
+    marginBottom: 12,
+  },
+  menuOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 14,
+  },
+  menuOptionIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuOptionContent: {
+    flex: 1,
+  },
+  menuOptionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+  },
+  menuOptionDesc: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  menuCancelBtn: {
+    marginTop: 14,
+    paddingVertical: 13,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surfaceSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
   },
   fullImageModal: {
     flex: 1,

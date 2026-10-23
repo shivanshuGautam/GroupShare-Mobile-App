@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Invitation = require('../models/Invitation');
 const { getDbStatus } = require('../config/db');
 const memoryDb = require('../services/memoryDb');
 const {
@@ -186,12 +187,26 @@ exports.verifyEmail = async (req, res) => {
       user.verificationCode = null;
       user.verificationExpires = null;
       await user.save();
+
+      // Associate pending invitations with this registered account (Req 1.B.8 & 1.B.9)
+      // Do NOT automatically add to group; transition to pending_acceptance so user can accept
+      await Invitation.updateMany(
+        { email: cleanEmail, status: 'pending_registration' },
+        { $set: { status: 'pending_acceptance' } }
+      );
     } else {
       await memoryDb.users.update(user._id, {
         isVerified: true,
         verificationCode: null,
         verificationExpires: null,
       });
+
+      const allInvites = await memoryDb.invitations.findByEmail(cleanEmail);
+      for (const inv of allInvites) {
+        if (inv.status === 'pending_registration') {
+          await memoryDb.invitations.update(inv._id, { status: 'pending_acceptance' });
+        }
+      }
     }
 
     const token = signToken(user);
@@ -352,6 +367,21 @@ exports.login = async (req, res) => {
         code: newCode,
         isVerified: false,
       });
+    }
+
+    // Associate any pending_registration invitations
+    if (isMongo) {
+      await Invitation.updateMany(
+        { email: cleanEmail, status: 'pending_registration' },
+        { $set: { status: 'pending_acceptance' } }
+      );
+    } else {
+      const allInvites = await memoryDb.invitations.findByEmail(cleanEmail);
+      for (const inv of allInvites) {
+        if (inv.status === 'pending_registration') {
+          await memoryDb.invitations.update(inv._id, { status: 'pending_acceptance' });
+        }
+      }
     }
 
     const token = signToken(user);

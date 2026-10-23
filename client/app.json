@@ -2,12 +2,14 @@
   "expo": {
     "name": "GroupShare",
     "slug": "groupshare",
+    "scheme": "groupshare",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.groupshare.mobile"
     },
     "android": {
       "package": "com.groupshare.mobile",
@@ -27,7 +29,8 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
     },
     "plugins": [
       "expo-font"

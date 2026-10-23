@@ -41,7 +41,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
   // Invite Modal State (Admins only)
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('member'); // 'member' | 'admin'
   const [inviting, setInviting] = useState(false);
+  const [groupInvitations, setGroupInvitations] = useState([]);
 
   const targetGroupId = groupDetails?.id || groupDetails?._id || group?.id || group?._id;
   const isAdmin = (groupDetails?.myRole || group?.myRole) === 'admin';
@@ -59,6 +61,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
 
       if (detailsRes.group) {
         setGroupDetails(detailsRes.group);
+        if (detailsRes.group.invitations) {
+          setGroupInvitations(detailsRes.group.invitations);
+        }
       }
       if (docsRes.documents) {
         setDocuments(docsRes.documents);
@@ -75,9 +80,10 @@ export default function GroupDetailsScreen({ group, onBack }) {
 
   // Confirm and Delete Group (Admin only)
   const confirmDeleteGroup = () => {
+    const groupName = groupDetails?.name || group?.name || 'this group';
     Alert.alert(
       'Delete Group',
-      'Are you sure you want to delete this group? This action cannot be undone.',
+      `Are you sure you want to delete "${groupName}"?\n\nWARNING: This will permanently delete the group, all uploaded documents, invitations, and data for ALL members. This action cannot be undone.`,
       [
         {
           text: 'Cancel',
@@ -218,16 +224,32 @@ export default function GroupDetailsScreen({ group, onBack }) {
     }
   };
 
-  // Delete Document
-  const handleDeleteDocument = async (docId) => {
+  // Delete Document for Me (WhatsApp-style: hides for current user only)
+  const handleDeleteDocumentForMe = async (docId) => {
     try {
-      await documentsApi.deleteDocument(docId);
-      loadData();
-      showToast.success('Deleted', 'Document was deleted successfully.');
+      setDocuments((prev) => prev.filter((d) => d.id !== docId));
+      await documentsApi.deleteForMe(docId);
+      showToast.success('Hidden For You', 'This file has been removed from your list.');
     } catch (err) {
-      showToast.error('Delete Failed', err);
+      showToast.error('Action Failed', err);
+      loadData();
     }
   };
+
+  // Delete Document for Everyone (Admin or Uploader only)
+  const handleDeleteDocumentForEveryone = async (docId) => {
+    try {
+      setDocuments((prev) => prev.filter((d) => d.id !== docId));
+      await documentsApi.deleteForEveryone(docId);
+      showToast.success('Deleted For Everyone', 'Document was permanently deleted for all members.');
+    } catch (err) {
+      showToast.error('Delete Failed', err);
+      loadData();
+    }
+  };
+
+  // Backward-compatible alias
+  const handleDeleteDocument = handleDeleteDocumentForEveryone;
 
   // View / Share Document
   const handleOpenDocument = async (doc) => {
@@ -247,16 +269,56 @@ export default function GroupDetailsScreen({ group, onBack }) {
 
     setInviting(true);
     try {
-      const res = await groupsApi.inviteMember(targetGroupId, inviteEmail.trim());
+      const res = await groupsApi.inviteMember(targetGroupId, inviteEmail.trim(), inviteRole);
       setIsInviteModalOpen(false);
       setInviteEmail('');
-      loadData();
-      showToast.success('Invitation Sent', res.message || 'Member invitation processed successfully.');
+      setInviteRole('member');
+      await loadData();
+      if (res.action === 'added_directly') {
+        showToast.success('Member Added', res.message || 'Friend added to the group successfully.');
+      } else {
+        showToast.success('Invitation Dispatched', res.message || 'Invitation email sent successfully!');
+      }
     } catch (err) {
       showToast.error('Invite Error', err);
     } finally {
       setInviting(false);
     }
+  };
+
+  // Resend Invitation
+  const handleResendInvite = async (invitationId) => {
+    try {
+      const res = await groupsApi.resendInvitation(targetGroupId, invitationId);
+      showToast.success('Invitation Resent', res.message || 'A fresh invitation email has been sent.');
+      await loadData();
+    } catch (err) {
+      showToast.error('Resend Failed', err);
+    }
+  };
+
+  // Cancel Invitation
+  const handleCancelInvite = (invitationId, email) => {
+    Alert.alert(
+      'Cancel Invitation',
+      `Are you sure you want to cancel the invitation sent to "${email}"?`,
+      [
+        { text: 'Keep Active', style: 'cancel' },
+        {
+          text: 'Cancel Invitation',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await groupsApi.cancelInvitation(targetGroupId, invitationId);
+              showToast.info('Cancelled', 'Invitation has been cancelled.');
+              await loadData();
+            } catch (err) {
+              showToast.error('Cancel Failed', err);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -398,7 +460,9 @@ export default function GroupDetailsScreen({ group, onBack }) {
               <DocumentCard
                 doc={item}
                 onOpen={handleOpenDocument}
-                onDelete={handleDeleteDocument}
+                onDelete={handleDeleteDocumentForEveryone}
+                onDeleteForMe={handleDeleteDocumentForMe}
+                onDeleteForEveryone={handleDeleteDocumentForEveryone}
                 baseUrl={baseUrl}
               />
             )}
@@ -489,31 +553,137 @@ export default function GroupDetailsScreen({ group, onBack }) {
             contentContainerStyle={styles.listContent}
             ListFooterComponent={
               isAdmin ? (
-                <View style={styles.adminDangerCard}>
-                  <View style={styles.adminDangerHeader}>
-                    <Ionicons name="warning-outline" size={20} color="#DC2626" />
-                    <View style={{ flex: 1, marginLeft: 8 }}>
-                      <Text style={styles.adminDangerTitle}>Administrator Controls</Text>
-                      <Text style={styles.adminDangerSub}>
-                        Deleting this group permanently deletes all documents, invitations, and notifications for all members.
-                      </Text>
+                <View>
+                  {/* Pending Invitations Section */}
+                  {groupInvitations && groupInvitations.length > 0 ? (
+                    <View style={styles.invitationsSection}>
+                      <View style={styles.invitationsHeaderRow}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Ionicons name="mail" size={16} color={theme.colors.primary} />
+                          <Text style={styles.invitationsSectionTitle}>
+                            Pending Invitations ({groupInvitations.length})
+                          </Text>
+                        </View>
+                        <TouchableOpacity onPress={loadData} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Ionicons name="refresh" size={16} color={theme.colors.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+
+                      {groupInvitations.map((inv) => {
+                        const isPending =
+                          inv.status === 'pending_registration' || inv.status === 'pending_acceptance';
+                        const isExpired = inv.status === 'expired';
+                        const isAccepted = inv.status === 'accepted';
+                        const isCancelled = inv.status === 'cancelled';
+
+                        const statusColor = isAccepted
+                          ? '#059669'
+                          : isPending
+                          ? '#4F46E5'
+                          : isExpired
+                          ? '#DC2626'
+                          : '#64748B';
+
+                        const statusBg = isAccepted
+                          ? '#ECFDF5'
+                          : isPending
+                          ? '#EEF2FF'
+                          : isExpired
+                          ? '#FEF2F2'
+                          : '#F1F5F9';
+
+                        const statusLabel =
+                          inv.status === 'pending_registration'
+                            ? 'Pending Registration'
+                            : inv.status === 'pending_acceptance'
+                            ? 'Pending Acceptance'
+                            : inv.status === 'accepted'
+                            ? 'Accepted'
+                            : inv.status === 'declined'
+                            ? 'Declined'
+                            : inv.status === 'expired'
+                            ? 'Expired'
+                            : 'Cancelled';
+
+                        const formattedExpiry = inv.expiresAt
+                          ? new Date(inv.expiresAt).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                            })
+                          : '';
+
+                        return (
+                          <View key={inv.id || inv._id} style={styles.inviteCard}>
+                            <View style={styles.inviteCardTop}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.inviteEmail}>{inv.email}</Text>
+                                <Text style={styles.inviteMeta}>
+                                  Role: {inv.role || 'member'} &bull; Expires: {formattedExpiry}
+                                  {inv.resendCount ? ` &bull; Resent ${inv.resendCount}x` : ''}
+                                </Text>
+                              </View>
+                              <View style={[styles.statusChip, { backgroundColor: statusBg }]}>
+                                <Text style={[styles.statusChipText, { color: statusColor }]}>
+                                  {statusLabel}
+                                </Text>
+                              </View>
+                            </View>
+
+                            {/* Resend and Cancel Buttons for Active / Expired Invites */}
+                            {!isAccepted && !isCancelled ? (
+                              <View style={styles.inviteActionsRow}>
+                                <TouchableOpacity
+                                  style={styles.resendBtn}
+                                  onPress={() => handleResendInvite(inv.id || inv._id)}
+                                  activeOpacity={0.7}
+                                >
+                                  <Ionicons name="paper-plane-outline" size={13} color={theme.colors.primary} />
+                                  <Text style={styles.resendBtnText}>Resend Email</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                  style={styles.cancelBtn}
+                                  onPress={() => handleCancelInvite(inv.id || inv._id, inv.email)}
+                                  activeOpacity={0.7}
+                                >
+                                  <Ionicons name="close-circle-outline" size={13} color={theme.colors.danger} />
+                                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                                </TouchableOpacity>
+                              </View>
+                            ) : null}
+                          </View>
+                        );
+                      })}
                     </View>
+                  ) : null}
+
+                  {/* Danger Zone */}
+                  <View style={styles.adminDangerCard}>
+                    <View style={styles.adminDangerHeader}>
+                      <Ionicons name="warning-outline" size={20} color="#DC2626" />
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={styles.adminDangerTitle}>Administrator Controls</Text>
+                        <Text style={styles.adminDangerSub}>
+                          Deleting this group permanently deletes all documents, invitations, and notifications for all members.
+                        </Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.adminDeleteGroupBtn}
+                      onPress={confirmDeleteGroup}
+                      disabled={deletingGroup}
+                      activeOpacity={0.8}
+                    >
+                      {deletingGroup ? (
+                        <ActivityIndicator size="small" color="#FFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="trash" size={16} color="#FFF" />
+                          <Text style={styles.adminDeleteGroupBtnText}>Delete This Group</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity
-                    style={styles.adminDeleteGroupBtn}
-                    onPress={confirmDeleteGroup}
-                    disabled={deletingGroup}
-                    activeOpacity={0.8}
-                  >
-                    {deletingGroup ? (
-                      <ActivityIndicator size="small" color="#FFF" />
-                    ) : (
-                      <>
-                        <Ionicons name="trash" size={16} color="#FFF" />
-                        <Text style={styles.adminDeleteGroupBtnText}>Delete This Group</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
                 </View>
               ) : null
             }
@@ -737,6 +907,42 @@ export default function GroupDetailsScreen({ group, onBack }) {
               value={inviteEmail}
               onChangeText={setInviteEmail}
             />
+
+            <Text style={styles.inputLabel}>Role in Group</Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+              <TouchableOpacity
+                style={[
+                  styles.roleChoiceBtn,
+                  inviteRole === 'member' && styles.roleChoiceBtnActive,
+                ]}
+                onPress={() => setInviteRole('member')}
+              >
+                <Text
+                  style={[
+                    styles.roleChoiceBtnText,
+                    inviteRole === 'member' && styles.roleChoiceBtnTextActive,
+                  ]}
+                >
+                  Member (Standard)
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.roleChoiceBtn,
+                  inviteRole === 'admin' && styles.roleChoiceBtnActive,
+                ]}
+                onPress={() => setInviteRole('admin')}
+              >
+                <Text
+                  style={[
+                    styles.roleChoiceBtnText,
+                    inviteRole === 'admin' && styles.roleChoiceBtnTextActive,
+                  ]}
+                >
+                  Group Admin
+                </Text>
+              </TouchableOpacity>
+            </View>
 
             <TouchableOpacity
               style={styles.submitModalBtn}
@@ -1267,6 +1473,116 @@ const styles = StyleSheet.create({
   adminDeleteGroupBtnText: {
     color: '#FFF',
     fontSize: 14,
+    fontWeight: '700',
+  },
+  invitationsSection: {
+    marginTop: theme.spacing.lg,
+    backgroundColor: '#FFFFFF',
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: theme.spacing.md,
+  },
+  invitationsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  invitationsSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  inviteCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 10,
+    marginBottom: 8,
+  },
+  inviteCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  inviteEmail: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  inviteMeta: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  statusChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  statusChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  inviteActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  resendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#EEF2FF',
+  },
+  resendBtnText: {
+    fontSize: 11,
+    color: theme.colors.primary,
+    fontWeight: '600',
+  },
+  cancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#FEF2F2',
+  },
+  cancelBtnText: {
+    fontSize: 11,
+    color: theme.colors.danger,
+    fontWeight: '600',
+  },
+  roleChoiceBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+  },
+  roleChoiceBtnActive: {
+    borderColor: theme.colors.primary,
+    backgroundColor: '#EEF2FF',
+  },
+  roleChoiceBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  roleChoiceBtnTextActive: {
+    color: theme.colors.primary,
     fontWeight: '700',
   },
 });

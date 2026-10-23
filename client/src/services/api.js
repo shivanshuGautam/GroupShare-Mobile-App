@@ -234,12 +234,43 @@ export const groupsApi = {
     return await apiRequest('/api/groups', 'POST', groupData);
   },
 
-  inviteMember: async (groupId, email) => {
-    return await apiRequest(`/api/groups/${groupId}/invite`, 'POST', { email });
+  inviteMember: async (groupId, email, role = 'member') => {
+    return await apiRequest(`/api/groups/${groupId}/invite`, 'POST', { email, role });
+  },
+
+  getGroupInvitations: async (groupId) => {
+    return await apiRequest(`/api/groups/${groupId}/invitations`);
+  },
+
+  resendInvitation: async (groupId, invitationId) => {
+    return await apiRequest(`/api/groups/${groupId}/invitations/${invitationId}/resend`, 'POST');
+  },
+
+  cancelInvitation: async (groupId, invitationId) => {
+    return await apiRequest(`/api/groups/${groupId}/invitations/${invitationId}`, 'DELETE');
   },
 
   deleteGroup: async (groupId) => {
     return await apiRequest(`/api/groups/${groupId}`, 'DELETE');
+  },
+};
+
+// Member Invitation Services
+export const invitationsApi = {
+  getUserPendingInvitations: async () => {
+    return await apiRequest('/api/invitations/pending');
+  },
+
+  getInvitationByToken: async (token) => {
+    return await apiRequest(`/api/invitations/${token}`, 'GET', null, false);
+  },
+
+  acceptInvitation: async (invitationId) => {
+    return await apiRequest(`/api/invitations/${invitationId}/accept`, 'POST');
+  },
+
+  declineInvitation: async (invitationId) => {
+    return await apiRequest(`/api/invitations/${invitationId}/decline`, 'POST');
   },
 };
 
@@ -320,7 +351,15 @@ export const documentsApi = {
   },
 
   deleteDocument: async (docId) => {
-    return await apiRequest(`/api/documents/${docId}`, 'DELETE');
+    return await apiRequest(`/api/documents/${docId}/everyone`, 'DELETE');
+  },
+
+  deleteForMe: async (docId) => {
+    return await apiRequest(`/api/documents/${docId}/me`, 'DELETE');
+  },
+
+  deleteForEveryone: async (docId) => {
+    return await apiRequest(`/api/documents/${docId}/everyone`, 'DELETE');
   },
 
   viewOrShareDocument: async (doc) => {
@@ -328,6 +367,30 @@ export const documentsApi = {
       const baseUrl = await getBaseUrl();
       const token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
       const downloadUrl = `${baseUrl}/api/documents/download/${doc.id}`;
+
+      // Web platform browser download
+      if (Platform.OS === 'web') {
+        const response = await fetch(downloadUrl, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) {
+          throw new Error(`Download failed with status ${response.status}`);
+        }
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = doc.originalName || doc.title || 'document';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          window.URL.revokeObjectURL(blobUrl);
+          if (a.parentNode) a.parentNode.removeChild(a);
+        }, 100);
+        return { success: true };
+      }
+
       const localTarget = `${FileSystem.documentDirectory}${doc.originalName || 'file'}`;
 
       const downloadResult = await FileSystem.downloadAsync(downloadUrl, localTarget, {

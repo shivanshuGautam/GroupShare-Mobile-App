@@ -12,9 +12,10 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../theme';
 import { useAuth } from '../context/AuthContext';
-import { getBaseUrl, setBaseUrl, testServerConnection } from '../services/api';
+import { getBaseUrl, setBaseUrl, testServerConnection, invitationsApi } from '../services/api';
 import showToast from '../services/toast';
 
 export default function AuthScreen() {
@@ -31,11 +32,33 @@ export default function AuthScreen() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('idle');
   const [connectionMessage, setConnectionMessage] = useState('');
+  const [invitationNotice, setInvitationNotice] = useState(null);
 
   useEffect(() => {
     getBaseUrl().then((url) => {
       setCurrentServerUrl(url);
       setTempServerUrl(url);
+    });
+
+    // Check if user opened app via an invitation link
+    AsyncStorage.getItem('@groupshare_pending_invite').then(async (token) => {
+      if (token) {
+        try {
+          const res = await invitationsApi.getInvitationByToken(token.trim());
+          if (res.invitation && res.invitation.email) {
+            setRegEmail(res.invitation.email);
+            setLoginEmail(res.invitation.email);
+            setActiveTab('register');
+            setInvitationNotice({
+              groupName: res.invitation.groupName,
+              inviterName: res.invitation.inviterName,
+              email: res.invitation.email,
+            });
+          }
+        } catch (_) {
+          // ignore
+        }
+      }
     });
   }, []);
 
@@ -304,6 +327,23 @@ export default function AuthScreen() {
           <Text style={styles.appTitle}>GroupShare</Text>
           <Text style={styles.tagline}>Secure Mobile Group Document Sharing</Text>
         </View>
+
+        {/* Invitation Notice if opened via invite link */}
+        {invitationNotice ? (
+          <View style={styles.inviteNoticeBanner}>
+            <View style={styles.inviteNoticeIconCircle}>
+              <Ionicons name="mail" size={20} color="#4F46E5" />
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.inviteNoticeTitle}>
+                Invited to "{invitationNotice.groupName}"
+              </Text>
+              <Text style={styles.inviteNoticeSub}>
+                Register with {invitationNotice.email} to join this workspace.
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
         {/* Tab Switcher */}
         <View style={styles.tabContainer}>
@@ -933,5 +973,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#FFF',
+  },
+  inviteNoticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1.5,
+    borderColor: '#C7D2FE',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  inviteNoticeIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#E0E7FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteNoticeTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#312E81',
+  },
+  inviteNoticeSub: {
+    fontSize: 12,
+    color: '#4F46E5',
+    marginTop: 2,
   },
 });

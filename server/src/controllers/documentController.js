@@ -235,51 +235,67 @@ exports.getGroupDocuments = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Group not found.' });
     }
 
+    const isCreator = group.createdBy && group.createdBy.toString() === userId.toString();
     const myMembership = group.members.find(
-      (m) => (m.user._id || m.user).toString() === userId.toString()
+      (m) => (m.user?._id || m.user).toString() === userId.toString()
     );
 
-    if (!myMembership) {
+    if (!myMembership && !isCreator) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. You are not a member of this group.',
       });
     }
 
-    const isAdmin = myMembership.role === 'admin';
+    const isAdmin = isCreator || (myMembership && myMembership.role === 'admin');
 
-    // Retrieve documents
+    // Retrieve documents (exclude isDeleted documents and documents hidden for this user)
     let docs;
     if (isMongo) {
-      docs = await Document.find({ group: groupId }).sort({ createdAt: -1 });
+      docs = await Document.find({
+        group: groupId,
+        isDeleted: { $ne: true },
+        hiddenFor: { $ne: userId },
+      }).sort({ createdAt: -1 });
     } else {
       docs = await memoryDb.documents.findByGroup(groupId);
+      docs = docs.filter(
+        (d) =>
+          !d.isDeleted &&
+          !(d.hiddenFor && d.hiddenFor.map(String).includes(userId.toString()))
+      );
       docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     }
 
     // Filter documents based on access rights
-    // If not admin, hide 'admin_only' documents
+    // If not admin, hide 'admin_only' documents unless uploaded by the user
     const accessibleDocs = docs.filter((d) => {
       if (isAdmin) return true;
-      if (d.uploadedBy.toString() === userId.toString()) return true;
+      if (d.uploadedBy && d.uploadedBy.toString() === userId.toString()) return true;
       return d.accessPermission !== 'admin_only';
     });
 
-    const formattedDocs = accessibleDocs.map((d) => ({
-      id: d._id,
-      title: d.title,
-      description: d.description,
-      originalName: d.originalName,
-      fileName: d.fileName,
-      fileUrl: `/uploads/${d.fileName}`,
-      mimeType: d.mimeType,
-      size: d.size,
-      uploaderName: d.uploaderName,
-      uploadedBy: d.uploadedBy,
-      accessPermission: d.accessPermission,
-      canDelete: isAdmin || d.uploadedBy.toString() === userId.toString(),
-      createdAt: d.createdAt,
-    }));
+    const formattedDocs = accessibleDocs.map((d) => {
+      const isUploader = d.uploadedBy && d.uploadedBy.toString() === userId.toString();
+      const canDeleteForEveryone = isAdmin || isUploader;
+      return {
+        id: d._id,
+        title: d.title,
+        description: d.description,
+        originalName: d.originalName,
+        fileName: d.fileName,
+        fileUrl: `/uploads/${d.fileName}`,
+        mimeType: d.mimeType,
+        size: d.size,
+        uploaderName: d.uploaderName,
+        uploadedBy: d.uploadedBy,
+        accessPermission: d.accessPermission,
+        canDelete: canDeleteForEveryone, // for backward compatibility
+        canDeleteForEveryone,
+        canDeleteForMe: true,
+        createdAt: d.createdAt,
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -304,8 +320,8 @@ exports.downloadDocument = async (req, res) => {
       doc = await memoryDb.documents.findById(id);
     }
 
-    if (!doc) {
-      return res.status(404).json({ success: false, message: 'Document not found.' });
+    if (!doc || doc.isDeleted) {
+      return res.status(404).json({ success: false, message: 'Document not found or has been deleted.' });
     }
 
     // Verify group membership & permission
@@ -320,17 +336,20 @@ exports.downloadDocument = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Associated group not found.' });
     }
 
+    const isCreator = group.createdBy && group.createdBy.toString() === userId.toString();
     const myMembership = group.members.find(
-      (m) => (m.user._id || m.user).toString() === userId.toString()
+      (m) => (m.user?._id || m.user).toString() === userId.toString()
     );
 
-    if (!myMembership) {
+    if (!myMembership && !isCreator) {
       return res.status(403).json({ success: false, message: 'Access denied.' });
     }
 
+    const isAdmin = isCreator || (myMembership && myMembership.role === 'admin');
+
     if (
       doc.accessPermission === 'admin_only' &&
-      myMembership.role !== 'admin' &&
+      !isAdmin &&
       doc.uploadedBy.toString() !== userId.toString()
     ) {
       return res.status(403).json({
@@ -352,8 +371,8 @@ exports.downloadDocument = async (req, res) => {
   }
 };
 
-// Delete Document
-exports.deleteDocument = async (req, res) => {
+// Delete Document for Me (hides the document from the current user only)
+exports.deleteForMe = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
@@ -366,8 +385,76 @@ exports.deleteDocument = async (req, res) => {
       doc = await memoryDb.documents.findById(id);
     }
 
-    if (!doc) {
-      return res.status(404).json({ success: false, message: 'Document not found.' });
+    if (!doc || doc.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found or has already been deleted.',
+      });
+    }
+
+    // Verify group membership
+    let group;
+    if (isMongo) {
+      group = await Group.findById(doc.group);
+    } else {
+      group = await memoryDb.groups.findById(doc.group);
+    }
+
+    if (!group) {
+      return res.status(404).json({ success: false, message: 'Associated group not found.' });
+    }
+
+    const isCreator = group.createdBy && group.createdBy.toString() === userId.toString();
+    const myMembership = group.members.find(
+      (m) => (m.user?._id || m.user).toString() === userId.toString()
+    );
+
+    if (!myMembership && !isCreator) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You are not a member of this group.',
+      });
+    }
+
+    // Add user to hiddenFor array (idempotent)
+    if (isMongo) {
+      await Document.findByIdAndUpdate(id, {
+        $addToSet: { hiddenFor: userId },
+      });
+    } else {
+      await memoryDb.documents.hideForUser(id, userId);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Document hidden for you successfully.',
+      documentId: id,
+    });
+  } catch (error) {
+    console.error('[Delete For Me Error]:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Delete Document for Everyone (Admins and Document Uploader only)
+exports.deleteForEveryone = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const isMongo = getDbStatus();
+
+    let doc;
+    if (isMongo) {
+      doc = await Document.findById(id);
+    } else {
+      doc = await memoryDb.documents.findById(id);
+    }
+
+    if (!doc || doc.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found or has already been deleted.',
+      });
     }
 
     let group;
@@ -377,48 +464,75 @@ exports.deleteDocument = async (req, res) => {
       group = await memoryDb.groups.findById(doc.group);
     }
 
-    const myMembership = group
-      ? group.members.find((m) => {
-          const memberUserId = m.user?._id || m.user;
-          return memberUserId && memberUserId.toString() === userId.toString();
-        })
-      : null;
+    if (!group) {
+      return res.status(404).json({ success: false, message: 'Associated group not found.' });
+    }
 
-    const isAdmin = myMembership && myMembership.role === 'admin';
-    const isUploader = doc.uploadedBy.toString() === userId.toString();
+    const isCreator = group.createdBy && group.createdBy.toString() === userId.toString();
+    const myMembership = group.members.find(
+      (m) => (m.user?._id || m.user).toString() === userId.toString()
+    );
+
+    const isAdmin = isCreator || (myMembership && myMembership.role === 'admin');
+    const isUploader = doc.uploadedBy && doc.uploadedBy.toString() === userId.toString();
 
     if (!isAdmin && !isUploader) {
       return res.status(403).json({
         success: false,
-        message: 'Permission denied. Only group admins or the uploader can delete this document.',
+        message: 'Permission denied. Only group administrators or the document uploader can delete this document for everyone.',
       });
     }
 
-    // Delete file from disk only if not referenced by another document
-    const otherReferences = isMongo
-      ? await Document.countDocuments({ fileName: doc.fileName, _id: { $ne: id } })
-      : memoryDb.rawStore.documents.filter((d) => d.fileName === doc.fileName && d._id.toString() !== id.toString()).length;
+    // Delete file from disk safely only if not referenced by another active document
+    let otherReferences = 0;
+    if (isMongo) {
+      otherReferences = await Document.countDocuments({
+        fileName: doc.fileName,
+        _id: { $ne: id },
+        isDeleted: { $ne: true },
+      });
+    } else {
+      otherReferences = memoryDb.rawStore.documents.filter(
+        (d) => d.fileName === doc.fileName && d._id.toString() !== id.toString() && !d.isDeleted
+      ).length;
+    }
 
-    if (otherReferences === 0) {
+    if (otherReferences === 0 && doc.fileName) {
       const filePath = path.join(__dirname, '..', '..', 'uploads', doc.fileName);
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
-        } catch (_) {}
+        } catch (fileErr) {
+          console.warn('[Delete Document] Notice unlinking physical file:', fileErr.message);
+        }
       }
     }
 
+    // Update the database to reflect deleted state
     if (isMongo) {
-      await Document.findByIdAndDelete(id);
+      await Document.findByIdAndUpdate(id, {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deletedBy: userId,
+      });
     } else {
-      await memoryDb.documents.delete(id);
+      await memoryDb.documents.update(id, {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deletedBy: userId,
+      });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Document deleted successfully.',
+      message: 'Document deleted for everyone successfully.',
+      documentId: id,
     });
   } catch (error) {
+    console.error('[Delete For Everyone Error]:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Backward-compatible alias
+exports.deleteDocument = exports.deleteForEveryone;

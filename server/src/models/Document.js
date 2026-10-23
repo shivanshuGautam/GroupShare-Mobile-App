@@ -47,10 +47,34 @@ const DocumentSchema = new mongoose.Schema(
       enum: ['all', 'admin_only', 'members_view_only'],
       default: 'all',
     },
+    hiddenFor: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// Optimize queries filtering out hidden and deleted files for group members
+DocumentSchema.index({ group: 1, isDeleted: 1 });
+DocumentSchema.index({ group: 1, hiddenFor: 1 });
 
 module.exports = mongoose.model('Document', DocumentSchema);

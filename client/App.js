@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,9 @@ import {
   Platform,
   StatusBar as RNStatusBar,
   LogBox,
+  Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -22,6 +24,10 @@ import GroupsScreen from './src/screens/GroupsScreen';
 import GroupDetailsScreen from './src/screens/GroupDetailsScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import InvitationAcceptModal from './src/components/InvitationAcceptModal';
+import PendingInvitationBanner from './src/components/PendingInvitationBanner';
+import { invitationsApi } from './src/services/api';
+import showToast from './src/services/toast';
 import Toast from 'react-native-toast-message';
 import { toastConfig } from './src/components/Toast/ToastConfig';
 
@@ -29,6 +35,111 @@ function MainApp() {
   const { user, isLoading, unreadCount } = useAuth();
   const [currentTab, setCurrentTab] = useState('groups'); // 'groups' | 'notifications' | 'profile'
   const [selectedGroup, setSelectedGroup] = useState(null);
+
+  // Invitation handling
+  const [userInvitations, setUserInvitations] = useState([]);
+  const [activeInviteModal, setActiveInviteModal] = useState(null);
+  const [groupsRefreshKey, setGroupsRefreshKey] = useState(0);
+
+  // Load user pending invitations
+  const loadUserInvitations = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await invitationsApi.getUserPendingInvitations();
+      if (res.invitations) {
+        setUserInvitations(res.invitations);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [user]);
+
+  // Deep Link Handling
+  const handleDeepLinkUrl = useCallback(
+    async (url) => {
+      if (!url) return;
+      try {
+        let token = null;
+        if (url.includes('/invite/')) {
+          const parts = url.split('/invite/');
+          if (parts[1]) token = parts[1].split('?')[0].split('#')[0].split('/')[0];
+        } else if (url.includes('token=')) {
+          const match = url.match(/[?&]token=([^&]+)/);
+          if (match) token = match[1];
+        }
+
+        if (token) {
+          await AsyncStorage.setItem('@groupshare_pending_invite', token.trim());
+          const invRes = await invitationsApi.getInvitationByToken(token.trim());
+          if (invRes.invitation) {
+            setActiveInviteModal(invRes.invitation);
+          }
+        }
+      } catch (err) {
+        if (__DEV__) {
+          console.log('[DeepLink] Parse error:', err);
+        }
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    // Initial deep link check on app startup
+    Linking.getInitialURL().then(handleDeepLinkUrl);
+    const sub = Linking.addEventListener('url', (event) => handleDeepLinkUrl(event.url));
+    return () => sub?.remove?.();
+  }, [handleDeepLinkUrl]);
+
+  // Check pending invites when user is authenticated
+  useEffect(() => {
+    if (user) {
+      loadUserInvitations();
+
+      // Check if there was a preserved deep link invite token
+      AsyncStorage.getItem('@groupshare_pending_invite').then(async (savedToken) => {
+        if (savedToken) {
+          try {
+            const res = await invitationsApi.getInvitationByToken(savedToken.trim());
+            if (res.invitation) {
+              setActiveInviteModal(res.invitation);
+            }
+          } catch (_) {
+            await AsyncStorage.removeItem('@groupshare_pending_invite');
+          }
+        }
+      });
+    }
+  }, [user, loadUserInvitations]);
+
+  // Accept Invitation Handler
+  const handleAcceptInvitation = async (invitationId) => {
+    try {
+      const res = await invitationsApi.acceptInvitation(invitationId);
+      await AsyncStorage.removeItem('@groupshare_pending_invite');
+      setActiveInviteModal(null);
+      showToast.success('Workspace Joined', res.message || 'You joined the group successfully!');
+      loadUserInvitations();
+      if (res.group) {
+        setSelectedGroup(res.group);
+      }
+    } catch (err) {
+      showToast.error('Join Error', err);
+    }
+  };
+
+  // Decline Invitation Handler
+  const handleDeclineInvitation = async (invitationId) => {
+    try {
+      await invitationsApi.declineInvitation(invitationId);
+      await AsyncStorage.removeItem('@groupshare_pending_invite');
+      setActiveInviteModal(null);
+      showToast.info('Invitation Dismissed', 'The invitation was declined.');
+      loadUserInvitations();
+    } catch (err) {
+      showToast.error('Action Failed', err);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -48,6 +159,18 @@ function MainApp() {
       <View style={styles.safeArea}>
         <StatusBar style="dark" />
         <AuthScreen />
+        {/* If user clicked deep link while logged out, show preview modal or preserve token */}
+        {activeInviteModal ? (
+          <InvitationAcceptModal
+            visible={!!activeInviteModal}
+            invitation={activeInviteModal}
+            currentUserEmail={null}
+            onAccept={() => {
+              showToast.info('Account Required', 'Please register or log in with the invited email to join.');
+            }}
+            onClose={() => setActiveInviteModal(null)}
+          />
+        ) : null}
       </View>
     );
   }
@@ -59,7 +182,11 @@ function MainApp() {
         <StatusBar style="dark" />
         <GroupDetailsScreen
           group={selectedGroup}
-          onBack={() => setSelectedGroup(null)}
+          onBack={() => {
+            setSelectedGroup(null);
+            setGroupsRefreshKey((prev) => prev + 1);
+            loadUserInvitations();
+          }}
         />
       </View>
     );
@@ -104,14 +231,35 @@ function MainApp() {
         onOpenProfile={() => setCurrentTab('profile')}
       />
 
+      {/* Pending Invitation Alert Banner */}
+      {userInvitations && userInvitations.length > 0 && currentTab !== 'profile' ? (
+        <PendingInvitationBanner
+          count={userInvitations.length}
+          onPress={() => setActiveInviteModal(userInvitations[0])}
+        />
+      ) : null}
+
       {/* Screen Body */}
       <View style={styles.body}>
         {currentTab === 'groups' && (
-          <GroupsScreen onSelectGroup={(group) => setSelectedGroup(group)} />
+          <GroupsScreen
+            key={groupsRefreshKey}
+            onSelectGroup={(group) => setSelectedGroup(group)}
+          />
         )}
         {currentTab === 'notifications' && <NotificationsScreen />}
         {currentTab === 'profile' && <ProfileScreen />}
       </View>
+
+      {/* Invitation Accept Modal */}
+      <InvitationAcceptModal
+        visible={!!activeInviteModal}
+        invitation={activeInviteModal}
+        currentUserEmail={user?.email}
+        onAccept={handleAcceptInvitation}
+        onDecline={handleDeclineInvitation}
+        onClose={() => setActiveInviteModal(null)}
+      />
 
       {/* Sleek Bottom Navigation Bar */}
       <View style={styles.bottomBar}>
@@ -189,13 +337,30 @@ function MainApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <MainApp />
-      <Toast config={toastConfig} />
+      <View style={styles.outerContainer}>
+        <View style={styles.appContainer}>
+          <MainApp />
+          <Toast config={toastConfig} />
+        </View>
+      </View>
     </AuthProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  outerContainer: {
+    flex: 1,
+    backgroundColor: Platform.OS === 'web' ? '#F1F5F9' : theme.colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  appContainer: {
+    flex: 1,
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 480 : '100%',
+    backgroundColor: theme.colors.surface,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: theme.colors.surface,

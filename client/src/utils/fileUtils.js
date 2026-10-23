@@ -45,11 +45,71 @@ export const getMimeType = (file) => {
  * - React Native FileReader / Blob fallback
  */
 export const readAssetAsBase64 = async (file) => {
-  if (!file || !file.uri) {
+  if (!file || (!file.uri && !file.file)) {
     throw new Error('Invalid file reference: URI is missing.');
   }
 
   const mimeType = getMimeType(file);
+
+  // Web platform support (browser File/Blob/blob: URI)
+  if (Platform.OS === 'web') {
+    const targetFile = file.file || file;
+    if (typeof Blob !== 'undefined' && targetFile instanceof Blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            const commaIndex = result.indexOf(',');
+            const base64 = commaIndex !== -1 ? result.substring(commaIndex + 1) : result;
+            resolve({
+              base64,
+              mimeType: targetFile.type || mimeType,
+              dataUri: result,
+            });
+          } else {
+            reject(new Error('FileReader returned non-string data.'));
+          }
+        };
+        reader.onerror = (err) => reject(err);
+        reader.readAsDataURL(targetFile);
+      });
+    }
+
+    if (file.uri) {
+      if (file.uri.startsWith('data:')) {
+        const commaIndex = file.uri.indexOf(',');
+        const base64 = commaIndex !== -1 ? file.uri.substring(commaIndex + 1) : file.uri;
+        return {
+          base64,
+          mimeType,
+          dataUri: file.uri,
+        };
+      }
+      const response = await fetch(file.uri);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            const commaIndex = result.indexOf(',');
+            const base64 = commaIndex !== -1 ? result.substring(commaIndex + 1) : result;
+            resolve({
+              base64,
+              mimeType: blob.type || mimeType,
+              dataUri: result,
+            });
+          } else {
+            reject(new Error('FileReader returned non-string data.'));
+          }
+        };
+        reader.onerror = (err) => reject(err);
+        reader.readAsDataURL(blob);
+      });
+    }
+  }
+
   let base64 = '';
   let tempCachedUri = null;
 

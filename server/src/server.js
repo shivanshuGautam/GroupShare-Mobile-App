@@ -20,6 +20,7 @@ const authRoutes = require('./routes/authRoutes');
 const groupRoutes = require('./routes/groupRoutes');
 const documentRoutes = require('./routes/documentRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const invitationRoutes = require('./routes/invitationRoutes');
 const memoryDb = require('./services/memoryDb');
 const User = require('./models/User');
 const Group = require('./models/Group');
@@ -56,6 +57,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/invitations', invitationRoutes);
 
 // Seed sample demo data for immediate testing
 const seedDemoData = async () => {
@@ -131,6 +133,18 @@ const seedDemoData = async () => {
     console.warn('Demo seed notice:', err.message);
   }
 };
+
+// Serve static web client build if available (for Web / iPhone Safari access)
+const clientDistPath = path.resolve(__dirname, '../../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
 
 // Global error handling
 app.use((err, req, res, next) => {
